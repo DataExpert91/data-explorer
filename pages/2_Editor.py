@@ -39,6 +39,79 @@ def commit(new_df):
 
 
 current = get_active_dataframe(st.session_state)
+column_positions = list(range(len(current.columns)))
+column_label_counts = Counter(str(column) for column in current.columns)
+
+
+def _column_schema(dataframe):
+    return tuple((type(column).__name__, repr(column)) for column in dataframe.columns)
+
+
+def _format_column_position(position):
+    column = current.columns[position]
+    label = str(column)
+    if column_label_counts[label] > 1 or not isinstance(column, str):
+        return f"{label} ({type(column).__name__}, column {position + 1})"
+    return label
+
+
+current_schema = _column_schema(current)
+saved_protected = st.session_state.get("protected_positions")
+if not isinstance(saved_protected, dict) or saved_protected.get("schema") != current_schema:
+    # Migrate the previous label-based state. A saved duplicate label protected
+    # every matching column under the old behavior.
+    legacy_protected = st.session_state.pop(
+        "w_protected", st.session_state.get("protected_cols", ["Row ID"])
+    )
+    if not isinstance(legacy_protected, list):
+        legacy_protected = []
+    protected_positions = [
+        position
+        for position, column in enumerate(current.columns)
+        if column in legacy_protected
+    ]
+    st.session_state["protected_positions"] = {
+        "schema": current_schema,
+        "positions": protected_positions,
+    }
+    st.session_state["w_protected_positions"] = protected_positions
+else:
+    protected_positions = [
+        position
+        for position in saved_protected.get("positions", [])
+        if isinstance(position, int) and position in column_positions
+    ]
+    if "w_protected_positions" not in st.session_state:
+        st.session_state["w_protected_positions"] = protected_positions
+    else:
+        widget_positions = st.session_state["w_protected_positions"]
+        if not isinstance(widget_positions, list):
+            widget_positions = []
+        protected_positions = [
+            position
+            for position in widget_positions
+            if isinstance(position, int) and position in column_positions
+        ]
+        if protected_positions != widget_positions:
+            st.session_state["w_protected_positions"] = protected_positions
+
+
+def _save_protected_positions(dataframe, positions, update_widget=True):
+    valid_positions = [
+        position
+        for position in positions
+        if isinstance(position, int) and 0 <= position < len(dataframe.columns)
+    ]
+    schema = _column_schema(dataframe)
+    st.session_state["protected_positions"] = {
+        "schema": schema,
+        "positions": valid_positions,
+    }
+    if update_widget:
+        st.session_state["w_protected_positions"] = valid_positions
+    st.session_state["protected_cols"] = [
+        dataframe.columns[position] for position in valid_positions
+    ]
 
 # ---------- Manage columns ----------
 with st.expander("Manage columns"):
@@ -56,53 +129,52 @@ with st.expander("Manage columns"):
         else:
             updated = current.copy()
             updated[name] = "" if new_type == "Text" else 0.0
+            _save_protected_positions(
+                updated,
+                st.session_state.get("w_protected_positions", protected_positions),
+            )
             commit(updated)
             st.rerun()
 
-    with st.form("delete_columns_form"):
-        to_delete = st.multiselect("Columns to delete", options=list(current.columns))
-        delete_clicked = st.form_submit_button("Delete selected columns")
+    with st.form("delete_columns_form", clear_on_submit=True):
+        to_delete = st.multiselect(
+            "Columns to delete",
+            options=column_positions,
+            format_func=_format_column_position,
+            key="w_delete_column_positions",
+        )
+        delete_clicked = st.form_submit_button(
+            "Delete selected columns", key="delete_columns_submit"
+        )
 
     if delete_clicked and to_delete:
-        if len(to_delete) >= len(current.columns):
+        remaining_positions = [
+            position for position in column_positions if position not in to_delete
+        ]
+        if not remaining_positions:
             st.error("A table needs at least one column.")
         else:
-            updated = current.drop(columns=to_delete)
-            # a deleted column cannot stay in the protected list
-            st.session_state["w_protected"] = [
-                c for c in st.session_state.get("w_protected", [])
-                if c in updated.columns
+            updated = current.iloc[:, remaining_positions].copy()
+            selected_protected = st.session_state.get(
+                "w_protected_positions", protected_positions
+            )
+            updated_protected = [
+                new_position
+                for new_position, old_position in enumerate(remaining_positions)
+                if old_position in selected_protected
             ]
+            _save_protected_positions(updated, updated_protected)
             commit(updated)
             st.rerun()
 
 # ---------- Protected columns ----------
-# the choice is saved, because widgets forget their value when the page is left
-if "w_protected" not in st.session_state:
-    wanted = st.session_state.get("protected_cols", ["Row ID"])
-    st.session_state["w_protected"] = [c for c in wanted if c in current.columns]
-
-
-protected_label_strings = [str(column) for column in current.columns]
-protected_label_counts = Counter(protected_label_strings)
-
-
-def _format_protected_column(column):
-    label = str(column)
-    if protected_label_counts[label] > 1:
-        position = current.columns.get_loc(column)
-        if isinstance(position, int):
-            return f"{label} ({type(column).__name__}, column {position + 1})"
-    return label
-
-
-protected = st.sidebar.multiselect(
+protected_positions = st.sidebar.multiselect(
     "Protected columns (cannot be edited)",
-    options=list(current.columns),
-    key="w_protected",
-    format_func=_format_protected_column,
+    options=column_positions,
+    key="w_protected_positions",
+    format_func=_format_column_position,
 )
-st.session_state["protected_cols"] = protected
+_save_protected_positions(current, protected_positions, update_widget=False)
 
 # ---------- The editor ----------
 editor_base = st.session_state["editor_base"]
@@ -122,9 +194,7 @@ if needs_temporary_labels:
 display_base = editor_base.copy(deep=False)
 display_base.columns = display_columns
 protected_display = [
-    display_columns[position]
-    for position, column in enumerate(original_columns)
-    if column in protected
+    display_columns[position] for position in protected_positions
 ]
 
 edited_display_df = st.data_editor(
