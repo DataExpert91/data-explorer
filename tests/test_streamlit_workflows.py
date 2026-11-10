@@ -137,11 +137,13 @@ def test_new_csv_upload_clears_old_quality_and_edit_state():
     at.session_state["dq_undo"] = {"previous_df": old_df}
     at.session_state["filters"] = {"Category": ["Edited"]}
     at.session_state["filter_cols"] = ["Category"]
-    at.session_state["w_filter_cols"] = ["Category"]
-    at.session_state["w_Category"] = ["Edited"]
+    at.session_state["w_filter_cols"] = [0]
 
     at.run()
     _assert_no_streamlit_exception(at)
+    at.multiselect(key="w_filter_value_0").set_value(["Edited"]).run()
+    _assert_no_streamlit_exception(at)
+    assert at.session_state["w_filter_value_0"] == ["Edited"]
     version_before_upload = at.session_state["data_version"]
 
     at.file_uploader[0].set_value(
@@ -163,4 +165,4 @@ def test_new_csv_upload_clears_old_quality_and_edit_state():
     assert at.session_state["filters"] == {}
     assert at.session_state["filter_cols"] == []
     assert at.session_state["w_filter_cols"] == []
-    assert "w_Category" not in at.session_state
+    assert "w_filter_value_0" not in at.session_state

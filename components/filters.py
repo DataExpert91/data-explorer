@@ -1,6 +1,8 @@
 # Sidebar filters that adapt to the columns of the current table.
 # Used by the Data Explorer and Charts pages, so both show the same filters.
 
+from collections import Counter
+
 import pandas as pd
 import streamlit as st
 from pandas.api import types as ptypes
@@ -23,26 +25,82 @@ def sidebar_filters(current_df):
 
     # 1. which columns to filter by
     columns = list(current_df.columns)
+    display_labels = [str(column) for column in columns]
+    display_label_counts = Counter(display_labels)
+
+    def format_column_position(position):
+        label = display_labels[position]
+        if display_label_counts[label] > 1:
+            column_type = type(columns[position]).__name__
+            return f"{label} ({column_type}, column {position + 1})"
+        return label
+
+    # Filter widget keys are positional, so clear them when the active schema
+    # changes. The saved values remain keyed by the original column labels.
+    schema = tuple(
+        (
+            type(column).__module__,
+            type(column).__qualname__,
+            repr(column),
+            repr(dtype),
+        )
+        for column, dtype in zip(current_df.columns, current_df.dtypes)
+    )
+    previous_schema = st.session_state.get("_filter_widget_schema")
+    if previous_schema != schema:
+        for state_key in list(st.session_state):
+            if state_key.startswith("w_filter_value_"):
+                del st.session_state[state_key]
+        if previous_schema is not None:
+            previous_dtypes = {
+                entry[:3]: entry[3]
+                for entry in previous_schema
+            }
+            for column, dtype in zip(current_df.columns, current_df.dtypes):
+                column_identity = (
+                    type(column).__module__,
+                    type(column).__qualname__,
+                    repr(column),
+                )
+                if (
+                    column_identity in previous_dtypes
+                    and previous_dtypes[column_identity] != repr(dtype)
+                ):
+                    saved.pop(column, None)
+        wanted = st.session_state.get("filter_cols", ["Category"])
+        st.session_state["w_filter_cols"] = [
+            position
+            for position, column in enumerate(columns)
+            if column in wanted
+        ]
+        st.session_state["_filter_widget_schema"] = schema
 
     if "w_filter_cols" not in st.session_state:
         wanted = st.session_state.get("filter_cols", ["Category"])
-        st.session_state["w_filter_cols"] = [c for c in wanted if c in columns]
+        st.session_state["w_filter_cols"] = [
+            position
+            for position, column in enumerate(columns)
+            if column in wanted
+        ]
 
-    chosen = st.sidebar.multiselect(
+    chosen_positions = st.sidebar.multiselect(
         "Filter by columns",
-        options=columns,
+        options=list(range(len(columns))),
         key="w_filter_cols",
+        format_func=format_column_position,
     )
+    chosen = [columns[position] for position in chosen_positions]
     st.session_state["filter_cols"] = chosen
 
     # 2. one filter per chosen column, the widget depends on the column type
     filtered_df = current_df
 
-    for col in chosen:
+    for column_position in chosen_positions:
+        col = columns[column_position]
         series = current_df[col].dropna()
         if series.empty:
             continue
-        key = f"w_{col}"
+        key = f"w_filter_value_{column_position}"
 
         if ptypes.is_datetime64_any_dtype(series):
             # dates: a range picker
