@@ -14,6 +14,7 @@ from .session_data import bump_data_version, ensure_data_version
 
 SAMPLE_SIZE = 500
 PREVIEW_ROWS = 12
+CONVERSION_EXAMPLE_LIMIT = 5
 
 
 def _bounded_value_repr(value) -> str:
@@ -153,20 +154,119 @@ def profile_dataframe(df: pd.DataFrame) -> tuple[dict, np.ndarray | None]:
     return report, duplicate_mask
 
 
-def _convert_series(series: pd.Series, target: str, date_format: str | None = None) -> pd.Series:
+def _convert_series_with_failure_masks(
+    series: pd.Series,
+    target: str,
+    date_format: str | None = None,
+) -> tuple[pd.Series, dict[str, pd.Series]]:
+    failure_masks = {}
     if target == "Text":
-        return series.astype("string")
+        return series.astype("string"), failure_masks
     if target == "Number":
-        return pd.to_numeric(series, errors="coerce")
+        converted = pd.to_numeric(series, errors="coerce")
+        failure_masks["Not a valid number"] = series.notna() & converted.isna()
+        return converted, failure_masks
     if target == "Integer":
         numeric = pd.to_numeric(series, errors="coerce")
-        fractional = numeric.notna() & (numeric % 1 != 0)
-        return numeric.mask(fractional).astype("Int64")
+        failure_masks["Not numeric"] = series.notna() & numeric.isna()
+        fractional_for_conversion = numeric.notna() & (numeric % 1 != 0)
+        non_finite = numeric.isin([np.inf, -np.inf]) & fractional_for_conversion
+        fractional = fractional_for_conversion & ~non_finite
+        failure_masks["Fractional numeric value (not a whole number)"] = fractional
+        failure_masks["Non-finite numeric value"] = non_finite
+        converted = numeric.mask(fractional_for_conversion).astype("Int64")
+        return converted, failure_masks
     if target == "Date/Time":
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
-            return pd.to_datetime(series, format=date_format or None, errors="coerce")
+            converted = pd.to_datetime(
+                series, format=date_format or None, errors="coerce"
+            )
+        failure_masks["Could not parse as Date/Time"] = series.notna() & converted.isna()
+        return converted, failure_masks
     raise ValueError(f"Unsupported target type: {target}")
+
+
+def _convert_series(series: pd.Series, target: str, date_format: str | None = None) -> pd.Series:
+    converted, _ = _convert_series_with_failure_masks(series, target, date_format)
+    return converted
+
+
+def _conversion_failure_details(
+    series: pd.Series,
+    failure_masks: dict[str, pd.Series],
+    example_limit: int = CONVERSION_EXAMPLE_LIMIT,
+) -> tuple[int, list[dict]]:
+    """Summarize failures and keep at most example_limit original values per column."""
+    groups = []
+    for reason, mask in failure_masks.items():
+        count = int(mask.sum())
+        if not count:
+            continue
+        sample_count = min(example_limit, count)
+        sample_offsets = set(_sample_positions(count, sample_count))
+        candidate_examples = []
+        failure_offset = 0
+        for position, failed in enumerate(mask.to_numpy(dtype=bool, copy=False)):
+            if failed:
+                if failure_offset in sample_offsets:
+                    candidate_examples.append(series.iloc[position])
+                failure_offset += 1
+                if failure_offset > max(sample_offsets, default=-1):
+                    break
+        groups.append(
+            {
+                "reason": reason,
+                "count": count,
+                "candidate_examples": candidate_examples,
+                "examples": [],
+            }
+        )
+
+    total_failures = sum(group["count"] for group in groups)
+    if not groups or example_limit <= 0:
+        return total_failures, [
+            {
+                "reason": group["reason"],
+                "count": group["count"],
+                "examples": [],
+                "additional_count": group["count"],
+            }
+            for group in groups
+        ]
+
+    # Give each failure reason an example first, then distribute remaining slots
+    # across the reasons so Integer conversions show both kinds when present.
+    remaining_slots = example_limit
+    for group in groups:
+        group["examples"] = group["candidate_examples"][:1]
+        remaining_slots -= len(group["examples"])
+
+    while remaining_slots > 0:
+        added_example = False
+        for group in groups:
+            candidate_count = len(group["candidate_examples"])
+            if len(group["examples"]) < candidate_count:
+                group["examples"].append(
+                    group["candidate_examples"][len(group["examples"])]
+                )
+                remaining_slots -= 1
+                added_example = True
+                if remaining_slots == 0:
+                    break
+        if not added_example:
+            break
+
+    details = [
+        {
+            "reason": group["reason"],
+            "count": group["count"],
+            "examples": group["examples"],
+            "additional_count": group["count"] - len(group["examples"]),
+        }
+        for group in groups
+    ]
+    return total_failures, details
 
 
 def _standardize_series(series: pd.Series, actions: dict) -> pd.Series:
@@ -273,6 +373,7 @@ def preview_cleaning(
     conversions = settings.get("conversions", {})
     date_format = settings.get("date_format")
     conversion_failures = {}
+    conversion_failure_details = {}
     drop_columns = settings.get("drop_missing_columns", [])
     missing_action = settings.get("missing_action", "Leave unchanged")
 
@@ -280,13 +381,18 @@ def preview_cleaning(
         if column not in df.columns:
             continue
         original = df[column]
-        converted = (
-            _convert_series(original, conversions[column], date_format)
-            if column in conversions
-            else original
-        )
         if column in conversions:
-            conversion_failures[column] = int((original.notna() & converted.isna()).sum())
+            converted, failure_masks = _convert_series_with_failure_masks(
+                original, conversions[column], date_format
+            )
+            failure_count, failure_details = _conversion_failure_details(
+                original, failure_masks
+            )
+            conversion_failures[column] = failure_count
+            if failure_details:
+                conversion_failure_details[column] = failure_details
+        else:
+            converted = original
         if missing_action == "Drop rows" and column in drop_columns:
             keep_rows &= converted.notna().to_numpy(dtype=bool)
 
@@ -331,6 +437,7 @@ def preview_cleaning(
         "duplicate_rows_removed": duplicate_count,
         "rows_dropped_for_missing": dropped_missing,
         "conversion_failures": conversion_failures,
+        "conversion_failure_details": conversion_failure_details,
         "missing_values_filled": filled_counts,
         "text_values_changed": standardized_counts,
     }

@@ -100,6 +100,157 @@ def test_convert_series_parses_dates_and_preserves_missing_values():
     pdt.assert_series_equal(converted, expected)
 
 
+def test_preview_reports_invalid_numeric_examples_and_apply_matches_preview():
+    df = pd.DataFrame(
+        {"amount": pd.Series(["12", "invalid", "34", None], dtype=object)}
+    )
+    original = df.copy(deep=True)
+    settings = {"conversions": {"amount": "Number"}}
+
+    summary, preview, _ = preview_cleaning(df, settings, None)
+    applied = apply_cleaning(df, settings)
+
+    assert summary["conversion_failures"] == {"amount": 1}
+    details = summary["conversion_failure_details"]["amount"]
+    assert details == [
+        {
+            "reason": "Not a valid number",
+            "count": 1,
+            "examples": ["invalid"],
+            "additional_count": 0,
+        }
+    ]
+    pdt.assert_frame_equal(preview, applied)
+    assert summary["conversion_failures"]["amount"] == int(
+        (df["amount"].notna() & applied["amount"].isna()).sum()
+    )
+    pdt.assert_frame_equal(df, original)
+
+
+def test_preview_reports_invalid_date_examples_and_apply_matches_preview():
+    df = pd.DataFrame(
+        {"date": pd.Series(["2025-01-02", "not-a-date", None, "2025-04-05"], dtype=object)}
+    )
+    original = df.copy(deep=True)
+    settings = {"conversions": {"date": "Date/Time"}}
+
+    summary, preview, _ = preview_cleaning(df, settings, None)
+    applied = apply_cleaning(df, settings)
+
+    assert summary["conversion_failures"] == {"date": 1}
+    details = summary["conversion_failure_details"]["date"]
+    assert details == [
+        {
+            "reason": "Could not parse as Date/Time",
+            "count": 1,
+            "examples": ["not-a-date"],
+            "additional_count": 0,
+        }
+    ]
+    pdt.assert_frame_equal(preview, applied)
+    assert summary["conversion_failures"]["date"] == int(
+        (df["date"].notna() & applied["date"].isna()).sum()
+    )
+    pdt.assert_frame_equal(df, original)
+
+
+def test_preview_separates_non_numeric_and_fractional_integer_values():
+    df = pd.DataFrame(
+        {
+            "quantity": pd.Series(
+                ["1", "bad", "2.5", "3.0", "inf", None], dtype=object
+            )
+        }
+    )
+    original = df.copy(deep=True)
+    settings = {"conversions": {"quantity": "Integer"}}
+
+    summary, preview, _ = preview_cleaning(df, settings, None)
+    applied = apply_cleaning(df, settings)
+
+    assert summary["conversion_failures"] == {"quantity": 3}
+    assert summary["conversion_failure_details"]["quantity"] == [
+        {
+            "reason": "Not numeric",
+            "count": 1,
+            "examples": ["bad"],
+            "additional_count": 0,
+        },
+        {
+            "reason": "Fractional numeric value (not a whole number)",
+            "count": 1,
+            "examples": ["2.5"],
+            "additional_count": 0,
+        },
+        {
+            "reason": "Non-finite numeric value",
+            "count": 1,
+            "examples": ["inf"],
+            "additional_count": 0,
+        },
+    ]
+    assert summary["conversion_failures"]["quantity"] == int(
+        (df["quantity"].notna() & applied["quantity"].isna()).sum()
+    )
+    expected = pd.DataFrame(
+        {"quantity": pd.Series([1, pd.NA, pd.NA, 3, pd.NA, pd.NA], dtype="Int64")}
+    )
+    pdt.assert_frame_equal(applied, expected)
+    assert applied["quantity"].dtype == pd.Int64Dtype()
+    pdt.assert_frame_equal(preview, applied)
+    pdt.assert_frame_equal(df, original)
+
+
+def test_preview_shares_integer_example_limit_across_failure_categories():
+    values = ["10"]
+    for position in range(7):
+        values.extend([f"bad-{position}", f"{position}.5", "inf"])
+    df = pd.DataFrame({"quantity": pd.Series(values, dtype=object)})
+    settings = {"conversions": {"quantity": "Integer"}}
+
+    summary, _, _ = preview_cleaning(df, settings, None)
+
+    assert summary["conversion_failures"]["quantity"] == 21
+    details = {
+        item["reason"]: item
+        for item in summary["conversion_failure_details"]["quantity"]
+    }
+    assert details["Not numeric"]["count"] == 7
+    assert details["Fractional numeric value (not a whole number)"]["count"] == 7
+    assert details["Non-finite numeric value"]["count"] == 7
+    assert sum(len(item["examples"]) for item in details.values()) == 5
+    assert details["Not numeric"]["additional_count"] == 5
+    assert (
+        details["Fractional numeric value (not a whole number)"]["additional_count"]
+        == 5
+    )
+    assert details["Non-finite numeric value"]["additional_count"] == 6
+    assert sum(item["additional_count"] for item in details.values()) == 16
+
+
+def test_preview_caps_conversion_examples_and_reports_additional_failures():
+    values = [f"invalid-{position}" for position in range(8)]
+    df = pd.DataFrame({"amount": pd.Series(values, dtype=object)})
+    settings = {"conversions": {"amount": "Number"}}
+
+    summary, _, _ = preview_cleaning(df, settings, None)
+
+    assert summary["conversion_failures"]["amount"] == 8
+    details = summary["conversion_failure_details"]["amount"]
+    assert len(details) == 1
+    assert details[0]["count"] == 8
+    assert details[0]["examples"] == [
+        "invalid-0",
+        "invalid-1",
+        "invalid-3",
+        "invalid-5",
+        "invalid-7",
+    ]
+    assert len(details[0]["examples"]) == 5
+    assert details[0]["additional_count"] == 3
+    assert all(type(value) is str for value in details[0]["examples"])
+
+
 def test_fill_value_validates_boolean_constants():
     values = pd.Series([True, pd.NA], dtype=object, name="active")
 

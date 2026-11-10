@@ -1,5 +1,7 @@
 """Profile the active dataset and apply optional, reversible cleaning."""
 
+from collections import Counter
+
 import pandas as pd
 import streamlit as st
 from pandas.api import types as ptypes
@@ -16,6 +18,8 @@ from components.session_data import (
     get_active_dataframe,
     undo_cleaned_dataframe,
 )
+
+DQ_PREVIEW_FORMAT_VERSION = 1
 
 
 st.title("Data Quality")
@@ -70,6 +74,14 @@ if has_duplicate_labels:
         "the affected columns cannot be selected unambiguously. Rename the headers "
         "in the source file and upload it again to use those actions."
     )
+
+column_label_counts = Counter(str(column) for column in current_df.columns)
+conversion_column_labels = {}
+for position, column in enumerate(current_df.columns):
+    label = str(column)
+    if column_label_counts[label] > 1 or not isinstance(column, str):
+        label = f"{label} ({type(column).__name__}, column {position + 1})"
+    conversion_column_labels[column] = label
 
 st.subheader("Quality analysis")
 if st.button("Run data quality analysis", key="dq_run_analysis"):
@@ -297,6 +309,7 @@ preview_state = st.session_state.get("dq_preview")
 if preview_state is not None and (
     preview_state.get("data_signature") != current_signature
     or preview_state.get("settings_signature") != settings_signature
+    or preview_state.get("format_version") != DQ_PREVIEW_FORMAT_VERSION
 ):
     st.session_state.pop("dq_preview", None)
     preview_state = None
@@ -321,6 +334,7 @@ if st.button(
             analysis["duplicate_mask"],
         )
         st.session_state["dq_preview"] = {
+            "format_version": DQ_PREVIEW_FORMAT_VERSION,
             "data_signature": current_signature,
             "settings_signature": settings_signature,
             "summary": summary,
@@ -334,6 +348,7 @@ if st.button(
 preview_state = st.session_state.get("dq_preview")
 preview_ready = (
     preview_state is not None
+    and preview_state.get("format_version") == DQ_PREVIEW_FORMAT_VERSION
     and preview_state.get("data_signature") == current_signature
     and preview_state.get("settings_signature") == settings_signature
 )
@@ -344,15 +359,34 @@ if preview_ready:
         f"duplicates to remove: {summary['duplicate_rows_removed']:,}; "
         f"rows to drop for missing values: {summary['rows_dropped_for_missing']:,}."
     )
-    if summary["conversion_failures"]:
-        st.write("Values that would become missing during conversion:")
-        st.dataframe(
-            pd.DataFrame(
-                summary["conversion_failures"].items(),
-                columns=["Column", "Values not convertible"],
-            ),
-            use_container_width=True,
+    if any(summary["conversion_failures"].values()):
+        st.write(
+            "These non-missing source values would become missing if you apply the "
+            "selected conversions. Existing missing values are not counted."
         )
+        failure_rows = []
+        for column, groups in summary["conversion_failure_details"].items():
+            for group in groups:
+                examples = []
+                for value in group["examples"]:
+                    rendered = repr(value)
+                    if len(rendered) > 120:
+                        rendered = rendered[:117] + "..."
+                    examples.append(f"{type(value).__name__}: {rendered}")
+                if group["additional_count"]:
+                    examples.append(
+                        f"{group['additional_count']} more not shown"
+                    )
+                failure_rows.append(
+                    {
+                        "Column": conversion_column_labels.get(column, str(column)),
+                        "Total failed conversions": summary["conversion_failures"][column],
+                        "Failure reason": group["reason"],
+                        "Failures of this type": group["count"],
+                        "Original examples": "; ".join(examples),
+                    }
+                )
+        st.dataframe(pd.DataFrame(failure_rows), use_container_width=True)
     if summary["missing_values_filled"]:
         st.write("Missing values to fill:")
         st.dataframe(
