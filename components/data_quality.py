@@ -15,6 +15,7 @@ from .session_data import bump_data_version, ensure_data_version
 SAMPLE_SIZE = 500
 PREVIEW_ROWS = 12
 CONVERSION_EXAMPLE_LIMIT = 5
+COMMON_MISSING_TEXT_TOKENS = ("N/A", "NA", "NULL", "None", "-", "unknown")
 
 
 def _bounded_value_repr(value) -> str:
@@ -64,6 +65,64 @@ def _sample_positions(length: int, limit: int = SAMPLE_SIZE) -> list[int]:
     return sorted({i * (length - 1) // (limit - 1) for i in range(limit)})
 
 
+def _recognized_blank_like_mask(
+    series: pd.Series,
+    treat_blank_strings: bool = False,
+    missing_tokens=(),
+) -> np.ndarray:
+    """Return a positional mask for opted-in blank strings and text tokens."""
+    normalized_tokens = {
+        token.strip().lower()
+        for token in missing_tokens
+        if isinstance(token, str) and token.strip()
+    }
+    if not treat_blank_strings and not normalized_tokens:
+        return np.zeros(len(series), dtype=bool)
+
+    try:
+        trimmed = series.str.strip()
+    except (AttributeError, TypeError):
+        return np.zeros(len(series), dtype=bool)
+
+    recognized = np.zeros(len(series), dtype=bool)
+    if treat_blank_strings:
+        recognized |= trimmed.eq("").fillna(False).to_numpy(dtype=bool)
+    if normalized_tokens:
+        recognized |= (
+            trimmed.str.lower().isin(normalized_tokens)
+            .fillna(False)
+            .to_numpy(dtype=bool)
+        )
+    return recognized
+
+
+def missing_value_mask(
+    series: pd.Series,
+    treat_blank_strings: bool = False,
+    missing_tokens=(),
+) -> np.ndarray:
+    """Return a positional mask combining pandas nulls and opted-in text values."""
+    actual_missing = series.isna().to_numpy(dtype=bool, copy=False)
+    recognized_blank_like = _recognized_blank_like_mask(
+        series, treat_blank_strings, missing_tokens
+    )
+    return actual_missing | recognized_blank_like
+
+
+def _replace_recognized_blank_like(
+    series: pd.Series,
+    treat_blank_strings: bool = False,
+    missing_tokens=(),
+) -> pd.Series:
+    """Return a column where recognized non-null strings are represented as NA."""
+    recognized = _recognized_blank_like_mask(
+        series, treat_blank_strings, missing_tokens
+    )
+    if recognized.any():
+        return series.mask(recognized, pd.NA)
+    return series
+
+
 def _type_candidates(series: pd.Series) -> tuple[str, str]:
     """Suggest likely numeric/date text without coercing the source column."""
     if not (
@@ -103,16 +162,35 @@ def _type_candidates(series: pd.Series) -> tuple[str, str]:
     return "", ""
 
 
-def profile_dataframe(df: pd.DataFrame) -> tuple[dict, np.ndarray | None]:
+def profile_dataframe(
+    df: pd.DataFrame,
+    treat_blank_strings: bool = False,
+    missing_tokens=(),
+) -> tuple[dict, np.ndarray | None]:
     """Build a compact quality report and cacheable positional duplicate mask."""
     row_count, column_count = df.shape
     column_report = []
     total_missing = 0
+    total_actual_missing = 0
+    total_recognized_missing = 0
     for position, name in enumerate(df.columns):
         series = df.iloc[:, position]
-        missing = int(series.isna().sum())
+        actual_missing_mask = series.isna().to_numpy(dtype=bool, copy=False)
+        recognized_missing_mask = _recognized_blank_like_mask(
+            series, treat_blank_strings, missing_tokens
+        )
+        actual_missing = int(actual_missing_mask.sum())
+        recognized_missing = int(recognized_missing_mask.sum())
+        missing = actual_missing + recognized_missing
         total_missing += missing
-        mismatch, suggestion = _type_candidates(series)
+        total_actual_missing += actual_missing
+        total_recognized_missing += recognized_missing
+        analysis_series = (
+            series.mask(recognized_missing_mask, pd.NA)
+            if recognized_missing
+            else series
+        )
+        mismatch, suggestion = _type_candidates(analysis_series)
         non_missing = row_count - missing
         column_report.append(
             {
@@ -121,6 +199,8 @@ def profile_dataframe(df: pd.DataFrame) -> tuple[dict, np.ndarray | None]:
                 "Data type": str(series.dtype),
                 "Non-missing": non_missing,
                 "Missing": missing,
+                "Actual missing": actual_missing,
+                "Recognized as missing": recognized_missing,
                 "Missing %": (100 * missing / row_count) if row_count else 0.0,
                 "Complete %": (100 * non_missing / row_count) if row_count else 0.0,
                 "Potential mismatch": mismatch,
@@ -145,6 +225,8 @@ def profile_dataframe(df: pd.DataFrame) -> tuple[dict, np.ndarray | None]:
         "rows": row_count,
         "columns": column_count,
         "total_missing": total_missing,
+        "actual_missing": total_actual_missing,
+        "recognized_as_missing": total_recognized_missing,
         "total_cells": total_cells,
         "complete_percent": complete_percent,
         "duplicate_rows": duplicate_count,
@@ -372,6 +454,8 @@ def preview_cleaning(
 
     conversions = settings.get("conversions", {})
     date_format = settings.get("date_format")
+    treat_blank_strings = settings.get("treat_blank_strings", False)
+    missing_tokens = settings.get("missing_tokens", ())
     conversion_failures = {}
     conversion_failure_details = {}
     drop_columns = settings.get("drop_missing_columns", [])
@@ -381,9 +465,12 @@ def preview_cleaning(
         if column not in df.columns:
             continue
         original = df[column]
+        effective_original = _replace_recognized_blank_like(
+            original, treat_blank_strings, missing_tokens
+        )
         if column in conversions:
             converted, failure_masks = _convert_series_with_failure_masks(
-                original, conversions[column], date_format
+                effective_original, conversions[column], date_format
             )
             failure_count, failure_details = _conversion_failure_details(
                 original, failure_masks
@@ -392,7 +479,7 @@ def preview_cleaning(
             if failure_details:
                 conversion_failure_details[column] = failure_details
         else:
-            converted = original
+            converted = effective_original
         if missing_action == "Drop rows" and column in drop_columns:
             keep_rows &= converted.notna().to_numpy(dtype=bool)
 
@@ -407,7 +494,9 @@ def preview_cleaning(
         for column in settings.get("fill_columns", []):
             if column not in df.columns:
                 continue
-            series = df[column]
+            series = _replace_recognized_blank_like(
+                df[column], treat_blank_strings, missing_tokens
+            )
             if column in conversions:
                 series = _convert_series(series, conversions[column], date_format)
             remaining = series if keep_rows.all() else series.iloc[keep_rows]
@@ -422,7 +511,9 @@ def preview_cleaning(
         for column in settings.get("standardize_columns", []):
             if column not in df.columns:
                 continue
-            series = df[column]
+            series = _replace_recognized_blank_like(
+                df[column], treat_blank_strings, missing_tokens
+            )
             if column in conversions:
                 series = _convert_series(series, conversions[column], date_format)
             if not keep_rows.all():
@@ -463,9 +554,14 @@ def apply_cleaning(
     result = df.copy(deep=False)
     conversions = settings.get("conversions", {})
     date_format = settings.get("date_format")
+    treat_blank_strings = settings.get("treat_blank_strings", False)
+    missing_tokens = settings.get("missing_tokens", ())
     for column, target in conversions.items():
         if column in result.columns:
-            result[column] = _convert_series(result[column], target, date_format)
+            series = _replace_recognized_blank_like(
+                result[column], treat_blank_strings, missing_tokens
+            )
+            result[column] = _convert_series(series, target, date_format)
 
     keep_rows = np.ones(len(result), dtype=bool)
     if settings.get("remove_duplicates"):
@@ -478,7 +574,12 @@ def apply_cleaning(
         columns = [c for c in settings.get("drop_missing_columns", []) if c in result.columns]
         if columns:
             for column in columns:
-                keep_rows &= result[column].notna().to_numpy(dtype=bool)
+                if column in conversions:
+                    keep_rows &= result[column].notna().to_numpy(dtype=bool)
+                else:
+                    keep_rows &= ~missing_value_mask(
+                        result[column], treat_blank_strings, missing_tokens
+                    )
     elif missing_action == "Fill values":
         if settings.get("remove_duplicates") and not keep_rows.all():
             result = result.iloc[keep_rows]
@@ -489,16 +590,18 @@ def apply_cleaning(
                 continue
             if values is not None and column not in values:
                 continue
-            if values is None and not result[column].isna().any():
+            series = _replace_recognized_blank_like(
+                result[column], treat_blank_strings, missing_tokens
+            )
+            if values is None and not series.isna().any():
                 continue
             value = values.get(column) if values is not None else None
             if value is None or pd.isna(value):
                 value = _fill_value(
-                    result[column],
+                    series,
                     settings.get("fill_strategy", "Mode"),
                     settings.get("fill_constant", ""),
                 )
-            series = result[column]
             if isinstance(value, (bool, np.bool_)) and ptypes.is_object_dtype(series.dtype):
                 series = series.astype("boolean")
             if isinstance(series.dtype, pd.CategoricalDtype) and value not in series.cat.categories:
@@ -512,6 +615,9 @@ def apply_cleaning(
     if text_actions.get("enabled"):
         for column in settings.get("standardize_columns", []):
             if column in result.columns:
-                result[column] = _standardize_series(result[column], text_actions)
+                series = _replace_recognized_blank_like(
+                    result[column], treat_blank_strings, missing_tokens
+                )
+                result[column] = _standardize_series(series, text_actions)
 
     return result

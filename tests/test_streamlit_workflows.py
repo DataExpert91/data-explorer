@@ -231,6 +231,37 @@ def test_old_conversion_preview_format_is_invalidated_safely():
     assert at.button(key="dq_apply_cleaning").disabled
 
 
+def test_blank_recognition_changes_invalidate_analysis_and_preview():
+    df = pd.DataFrame(
+        {"label": ["", "", "value"], "value": [1, 1, 2]}
+    )
+    at = _open_quality_page(df)
+
+    _click_button(at, "dq_run_analysis")
+    at.checkbox(key="dq_remove_duplicates").set_value(True).run()
+    _assert_no_streamlit_exception(at)
+    _click_button(at, "dq_run_preview")
+    assert "dq_preview" in at.session_state
+
+    at.checkbox(key="dq_treat_blank_strings").set_value(True).run()
+    _assert_no_streamlit_exception(at)
+    assert "dq_analysis" not in at.session_state
+    assert "dq_preview" not in at.session_state
+    assert at.button(key="dq_apply_cleaning").disabled
+
+    _click_button(at, "dq_run_analysis")
+    assert at.session_state["dq_analysis"]["report"]["total_missing"] == 2
+    assert at.session_state["dq_analysis"]["report"]["recognized_as_missing"] == 2
+    _click_button(at, "dq_run_preview")
+    assert "dq_preview" in at.session_state
+
+    at.multiselect(key="dq_missing_tokens").set_value(["N/A"]).run()
+    _assert_no_streamlit_exception(at)
+    assert "dq_analysis" not in at.session_state
+    assert "dq_preview" not in at.session_state
+    assert at.button(key="dq_apply_cleaning").disabled
+
+
 def test_conversion_failure_report_distinguishes_same_string_column_labels():
     df = pd.DataFrame(
         [["bad-integer-label", "bad-string-label"], ["1", "2"]],

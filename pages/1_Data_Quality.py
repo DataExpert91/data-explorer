@@ -7,6 +7,7 @@ import streamlit as st
 from pandas.api import types as ptypes
 
 from components.data_quality import (
+    COMMON_MISSING_TEXT_TOKENS,
     apply_cleaning,
     dataframe_signature,
     preview_cleaning,
@@ -19,7 +20,7 @@ from components.session_data import (
     undo_cleaned_dataframe,
 )
 
-DQ_PREVIEW_FORMAT_VERSION = 1
+DQ_PREVIEW_FORMAT_VERSION = 2
 
 
 st.title("Data Quality")
@@ -59,11 +60,6 @@ def reset_downstream_widgets():
             del st.session_state[key]
 
 
-analysis = st.session_state.get("dq_analysis")
-if analysis is not None and analysis.get("signature") != current_signature:
-    invalidate_quality_results()
-    analysis = None
-
 source_name = st.session_state.get("source", "current dataset")
 st.caption(f"Current dataset: {source_name}")
 st.caption(f"Profiling {len(current_df):,} rows x {len(current_df.columns):,} columns")
@@ -74,6 +70,30 @@ if has_duplicate_labels:
         "the affected columns cannot be selected unambiguously. Rename the headers "
         "in the source file and upload it again to use those actions."
     )
+
+with st.expander("Blank-like value recognition", expanded=False):
+    treat_blank_strings = st.checkbox(
+        "Treat empty and whitespace-only strings as missing",
+        key="dq_treat_blank_strings",
+        help="This applies only to actual text values. It does not change the active data until you apply a cleaning operation.",
+    )
+    missing_tokens = st.multiselect(
+        "Text tokens to treat as missing",
+        options=COMMON_MISSING_TEXT_TOKENS,
+        key="dq_missing_tokens",
+        help="Selected tokens match case-insensitively after surrounding whitespace is trimmed. No tokens are selected by default.",
+    )
+
+missing_policy_signature = (
+    bool(treat_blank_strings),
+    tuple(sorted(token.casefold() for token in missing_tokens)),
+)
+analysis_signature = (current_signature, missing_policy_signature)
+
+analysis = st.session_state.get("dq_analysis")
+if analysis is not None and analysis.get("signature") != analysis_signature:
+    invalidate_quality_results()
+    analysis = None
 
 column_label_counts = Counter(str(column) for column in current_df.columns)
 conversion_column_labels = {}
@@ -87,9 +107,13 @@ st.subheader("Quality analysis")
 if st.button("Run data quality analysis", key="dq_run_analysis"):
     with st.spinner("Checking completeness, types, and duplicate rows..."):
         try:
-            report, duplicate_mask = profile_dataframe(current_df)
+            report, duplicate_mask = profile_dataframe(
+                current_df,
+                treat_blank_strings=treat_blank_strings,
+                missing_tokens=missing_tokens,
+            )
             st.session_state["dq_analysis"] = {
-                "signature": current_signature,
+                "signature": analysis_signature,
                 "report": report,
                 "duplicate_mask": duplicate_mask,
             }
@@ -99,7 +123,7 @@ if st.button("Run data quality analysis", key="dq_run_analysis"):
             st.error(f"Could not complete the analysis: {exc}")
 
 analysis = st.session_state.get("dq_analysis")
-if analysis is None or analysis.get("signature") != current_signature:
+if analysis is None or analysis.get("signature") != analysis_signature:
     st.info("Run the analysis to calculate exact duplicate counts and column statistics.")
 else:
     report = analysis["report"]
@@ -164,7 +188,7 @@ convert_columns = st.multiselect(
 
 target_types = ["Text", "Integer", "Number", "Date/Time"]
 report_suggestions = {}
-if analysis is not None and analysis.get("signature") == current_signature:
+if analysis is not None and analysis.get("signature") == analysis_signature:
     report_suggestions = {
         row["Column"]: row["Suggested type"]
         for row in analysis["report"]["column_report"]
@@ -294,6 +318,8 @@ else:
 settings = {
     "remove_duplicates": remove_duplicates,
     "conversions": conversions,
+    "treat_blank_strings": treat_blank_strings,
+    "missing_tokens": list(missing_tokens),
     "date_format": date_format,
     "missing_action": missing_action,
     "drop_missing_columns": drop_missing_columns,
@@ -321,7 +347,7 @@ has_actions = bool(
     or (missing_action == "Fill values" and fill_columns)
     or standardize_columns
 )
-analysis_ready = analysis is not None and analysis.get("signature") == current_signature
+analysis_ready = analysis is not None and analysis.get("signature") == analysis_signature
 if st.button(
     "Preview selected cleaning",
     key="dq_run_preview",
