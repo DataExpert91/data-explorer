@@ -1,0 +1,166 @@
+from pathlib import Path
+
+import pandas as pd
+import pandas.testing as pdt
+from streamlit.testing.v1 import AppTest
+
+
+APP_PATH = Path(__file__).resolve().parents[1] / "Data_Explorer.py"
+QUALITY_PAGE = "pages/1_Data_Quality.py"
+
+
+def _assert_no_streamlit_exception(at):
+    assert not at.exception
+
+
+def _click_button(at, key):
+    at.button(key=key).click().run()
+    _assert_no_streamlit_exception(at)
+
+
+def _open_quality_page(df, edited_df=None):
+    at = AppTest.from_file(str(APP_PATH))
+    at.session_state["df"] = df.copy(deep=True)
+    at.session_state["source"] = "test fixture"
+    if edited_df is not None:
+        at.session_state["edited_df"] = edited_df.copy(deep=True)
+
+    at.run()
+    _assert_no_streamlit_exception(at)
+    at.switch_page(QUALITY_PAGE).run()
+    _assert_no_streamlit_exception(at)
+    return at
+
+
+def _apply_duplicate_removal(at):
+    _click_button(at, "dq_run_analysis")
+    assert "dq_analysis" in at.session_state
+
+    at.checkbox(key="dq_remove_duplicates").set_value(True).run()
+    _assert_no_streamlit_exception(at)
+
+    _click_button(at, "dq_run_preview")
+    assert "dq_preview" in at.session_state
+
+    version_before_apply = at.session_state["data_version"]
+    _click_button(at, "dq_apply_cleaning")
+    return version_before_apply
+
+
+def test_apply_and_undo_when_no_edited_dataframe_exists_initially():
+    original_df = pd.DataFrame(
+        {"Group": ["A", "A", "B"], "Value": [1, 1, 2]}
+    )
+    expected_cleaned = pd.DataFrame(
+        {"Group": ["A", "B"], "Value": [1, 2]}, index=[0, 2]
+    )
+    at = _open_quality_page(original_df)
+
+    version_before_apply = _apply_duplicate_removal(at)
+
+    pdt.assert_frame_equal(at.session_state["edited_df"], expected_cleaned)
+    assert at.session_state["dq_undo"]["had_edited_df"] is False
+    pdt.assert_frame_equal(at.session_state["dq_undo"]["previous_df"], original_df)
+    assert at.session_state["data_version"] == version_before_apply + 1
+    assert at.session_state["data_version_df_id"] == id(at.session_state["edited_df"])
+    assert "dq_analysis" not in at.session_state
+    assert "dq_preview" not in at.session_state
+
+    version_before_undo = at.session_state["data_version"]
+    _click_button(at, "dq_undo_cleaning")
+
+    assert "edited_df" not in at.session_state
+    assert "dq_undo" not in at.session_state
+    pdt.assert_frame_equal(at.session_state["df"], original_df)
+    assert at.session_state["data_version"] == version_before_undo + 1
+    assert at.session_state["data_version_df_id"] == id(at.session_state["df"])
+    assert "dq_analysis" not in at.session_state
+    assert "dq_preview" not in at.session_state
+
+
+def test_apply_and_undo_restore_an_existing_edited_dataframe():
+    df = pd.DataFrame({"Source": ["source row"]})
+    original_edited_df = pd.DataFrame(
+        {"Group": ["X", "X", "Y"], "Value": [10, 10, 20]},
+        index=[5, 6, 7],
+    )
+    expected_cleaned = pd.DataFrame(
+        {"Group": ["X", "Y"], "Value": [10, 20]}, index=[5, 7]
+    )
+    at = _open_quality_page(df, edited_df=original_edited_df)
+
+    version_before_apply = _apply_duplicate_removal(at)
+
+    pdt.assert_frame_equal(at.session_state["edited_df"], expected_cleaned)
+    assert at.session_state["dq_undo"]["had_edited_df"] is True
+    pdt.assert_frame_equal(
+        at.session_state["dq_undo"]["previous_df"], original_edited_df
+    )
+    assert at.session_state["data_version"] == version_before_apply + 1
+
+    version_before_undo = at.session_state["data_version"]
+    _click_button(at, "dq_undo_cleaning")
+
+    assert "edited_df" in at.session_state
+    pdt.assert_frame_equal(at.session_state["edited_df"], original_edited_df)
+    assert "dq_undo" not in at.session_state
+    assert at.session_state["data_version"] == version_before_undo + 1
+    assert at.session_state["data_version_df_id"] == id(at.session_state["edited_df"])
+
+
+def test_undo_button_availability_tracks_the_undo_snapshot():
+    df = pd.DataFrame({"Group": ["A", "A", "B"], "Value": [1, 1, 2]})
+    at = _open_quality_page(df)
+
+    assert at.button(key="dq_undo_cleaning").disabled
+
+    _apply_duplicate_removal(at)
+    assert "dq_undo" in at.session_state
+    assert not at.button(key="dq_undo_cleaning").disabled
+
+    _click_button(at, "dq_undo_cleaning")
+    assert "dq_undo" not in at.session_state
+    assert at.button(key="dq_undo_cleaning").disabled
+
+
+def test_new_csv_upload_clears_old_quality_and_edit_state():
+    old_df = pd.DataFrame({"Category": ["Old"], "Amount": [1]})
+    old_edited_df = pd.DataFrame({"Category": ["Edited"], "Amount": [2]})
+    at = AppTest.from_file(str(APP_PATH))
+    at.session_state["df"] = old_df.copy(deep=True)
+    at.session_state["edited_df"] = old_edited_df.copy(deep=True)
+    at.session_state["source"] = "old.csv"
+    at.session_state["data_version"] = 6
+    at.session_state["data_version_df_id"] = id(at.session_state["edited_df"])
+    at.session_state["dq_analysis"] = {"report": "stale"}
+    at.session_state["dq_preview"] = {"summary": "stale"}
+    at.session_state["dq_undo"] = {"previous_df": old_df}
+    at.session_state["filters"] = {"Category": ["Edited"]}
+    at.session_state["filter_cols"] = ["Category"]
+    at.session_state["w_filter_cols"] = ["Category"]
+    at.session_state["w_Category"] = ["Edited"]
+
+    at.run()
+    _assert_no_streamlit_exception(at)
+    version_before_upload = at.session_state["data_version"]
+
+    at.file_uploader[0].set_value(
+        ("new.csv", b"Region,Amount\nNorth,10\nSouth,20\n", "text/csv")
+    ).run()
+    _assert_no_streamlit_exception(at)
+
+    expected_df = pd.DataFrame({"Region": ["North", "South"], "Amount": [10, 20]})
+    pdt.assert_frame_equal(at.session_state["df"], expected_df)
+    assert at.session_state["source"] == "new.csv"
+    assert at.session_state["data_version"] == version_before_upload + 1
+    assert at.session_state["data_version_df_id"] == id(at.session_state["df"])
+    assert "edited_df" not in at.session_state
+    assert "dq_analysis" not in at.session_state
+    assert "dq_preview" not in at.session_state
+    assert "dq_undo" not in at.session_state
+
+    # Filter state is cleared, then recreated for the newly uploaded columns.
+    assert at.session_state["filters"] == {}
+    assert at.session_state["filter_cols"] == []
+    assert at.session_state["w_filter_cols"] == []
+    assert "w_Category" not in at.session_state
