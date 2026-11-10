@@ -20,7 +20,7 @@ from components.session_data import (
     undo_cleaned_dataframe,
 )
 
-DQ_PREVIEW_FORMAT_VERSION = 2
+DQ_PREVIEW_FORMAT_VERSION = 3
 
 
 st.title("Data Quality")
@@ -268,7 +268,14 @@ if missing_action == "Drop rows":
         help="Leave this empty to keep all rows.",
     )
 elif missing_action == "Fill values":
-    fill_strategies = ["Constant", "Mean", "Median", "Mode"]
+    fill_strategies = [
+        "Constant",
+        "Mean",
+        "Median",
+        "Mode",
+        "Forward Fill",
+        "Backward Fill",
+    ]
     if st.session_state.get("dq_fill_strategy") not in fill_strategies:
         st.session_state["dq_fill_strategy"] = "Mode"
     fill_strategy = st.selectbox(
@@ -286,6 +293,33 @@ elif missing_action == "Fill values":
     )
     if fill_strategy == "Constant":
         fill_constant = st.text_input("Constant fill value", key="dq_fill_constant")
+
+st.subheader("Drop columns by missing percentage")
+threshold_control_disabled = len(current_df) == 0 or len(columns) == 0
+if len(current_df) == 0:
+    st.info(
+        "Missing percentages cannot be measured when the dataset has zero rows. "
+        "Column removal by threshold is unavailable."
+    )
+elif len(columns) == 0:
+    st.info("There are no columns to evaluate for missingness.")
+threshold_enabled = st.checkbox(
+    "Remove columns at or above a missing-value threshold",
+    key="dq_enable_column_threshold",
+    disabled=threshold_control_disabled,
+)
+drop_columns_threshold = None
+if threshold_enabled and not threshold_control_disabled:
+    drop_columns_threshold = st.slider(
+        "Missing percentage threshold",
+        min_value=0,
+        max_value=100,
+        value=50,
+        step=1,
+        format="%d%%",
+        key="dq_missing_column_threshold",
+        help="Columns with missing percentages greater than or equal to this value are removed.",
+    )
 
 keep_valid_selection("dq_standardize_columns", set(text_columns))
 standardize_columns = st.multiselect(
@@ -326,6 +360,7 @@ settings = {
     "fill_columns": fill_columns,
     "fill_strategy": fill_strategy,
     "fill_constant": fill_constant,
+    "drop_columns_threshold": drop_columns_threshold,
     "standardize_columns": standardize_columns,
     "text_actions": text_actions,
 }
@@ -345,6 +380,7 @@ has_actions = bool(
     or conversions
     or (missing_action == "Drop rows" and drop_missing_columns)
     or (missing_action == "Fill values" and fill_columns)
+    or drop_columns_threshold is not None
     or standardize_columns
 )
 analysis_ready = analysis is not None and analysis.get("signature") == analysis_signature
@@ -414,14 +450,35 @@ if preview_ready:
                 )
         st.dataframe(pd.DataFrame(failure_rows), use_container_width=True)
     if summary["missing_values_filled"]:
-        st.write("Missing values to fill:")
+        st.write("Missing-value fill results:")
         st.dataframe(
             pd.DataFrame(
-                summary["missing_values_filled"].items(),
-                columns=["Column", "Values filled"],
+                [
+                    {
+                        "Column": column,
+                        "Values filled": count,
+                        "Missing values remaining": summary[
+                            "missing_values_remaining"
+                        ].get(column, 0),
+                    }
+                    for column, count in summary["missing_values_filled"].items()
+                ]
             ),
             use_container_width=True,
         )
+    if summary["column_drop_threshold"] is not None:
+        st.write(
+            "Columns at or above the selected missing-value threshold "
+            f"({summary['column_drop_threshold']}%):"
+        )
+        if summary["columns_to_drop"]:
+            st.dataframe(
+                pd.DataFrame(summary["columns_to_drop"]),
+                use_container_width=True,
+            )
+        else:
+            st.caption("No columns meet this threshold.")
+        st.write(f"Columns remaining: {summary['columns_remaining']:,}")
     if summary["text_values_changed"]:
         st.write("Text values that would be standardized:")
         st.dataframe(
@@ -445,6 +502,9 @@ if st.button(
             settings,
             duplicate_mask=analysis["duplicate_mask"],
             fill_values=preview_state["fill_values"],
+            drop_column_positions=[
+                row["Position"] - 1 for row in preview_state["summary"]["columns_to_drop"]
+            ],
         )
         apply_cleaned_dataframe(st.session_state, cleaned_df)
         reset_downstream_widgets()

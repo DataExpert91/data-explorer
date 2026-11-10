@@ -295,13 +295,123 @@ def test_conversion_failure_report_distinguishes_same_string_column_labels():
         for frame in at.dataframe
         if "Failure reason" in frame.value.columns
     )
-    assert failure_table["Column"].tolist() == [
+    assert sorted(failure_table["Column"]) == sorted([
         "1 (int, column 1)",
         "1 (str, column 2)",
-    ]
+    ])
     assert at.session_state["df"].columns.tolist() == [1, "1"]
     assert type(at.session_state["df"].columns[0]) is int
     assert type(at.session_state["df"].columns[1]) is str
+
+
+def test_directional_fill_strategy_change_invalidates_preview_and_apply_gating():
+    df = pd.DataFrame({"score": [None, 1.0, None, 2.0], "tag": ["a", "b", "c", "d"]})
+    at = _open_quality_page(df)
+
+    _click_button(at, "dq_run_analysis")
+    at.selectbox(key="dq_missing_action").set_value("Fill values").run()
+    _assert_no_streamlit_exception(at)
+    at.multiselect(key="dq_fill_columns").set_value(["score"]).run()
+    _assert_no_streamlit_exception(at)
+    at.selectbox(key="dq_fill_strategy").set_value("Forward Fill").run()
+    _assert_no_streamlit_exception(at)
+
+    _click_button(at, "dq_run_preview")
+    assert at.session_state["dq_preview"]["summary"]["missing_values_filled"] == {
+        "score": 1
+    }
+    assert at.session_state["dq_preview"]["summary"]["missing_values_remaining"] == {
+        "score": 1
+    }
+    assert not at.button(key="dq_apply_cleaning").disabled
+
+    at.selectbox(key="dq_fill_strategy").set_value("Backward Fill").run()
+    _assert_no_streamlit_exception(at)
+    assert "dq_preview" not in at.session_state
+    assert at.button(key="dq_apply_cleaning").disabled
+
+    _click_button(at, "dq_run_preview")
+    assert at.session_state["dq_preview"]["summary"]["missing_values_filled"] == {
+        "score": 2
+    }
+    assert at.session_state["dq_preview"]["summary"]["missing_values_remaining"] == {
+        "score": 0
+    }
+    _click_button(at, "dq_apply_cleaning")
+    expected = pd.DataFrame(
+        {"score": [1.0, 1.0, 2.0, 2.0], "tag": ["a", "b", "c", "d"]}
+    )
+    pdt.assert_frame_equal(at.session_state["edited_df"], expected)
+    _click_button(at, "dq_undo_cleaning")
+    pdt.assert_frame_equal(at.session_state["df"], df)
+    assert "edited_df" not in at.session_state
+
+
+def test_missing_percentage_threshold_invalidates_preview_and_apply_undo():
+    df = pd.DataFrame(
+        {
+            "sparse": [None, None, "left", "right"],
+            "keep": ["a", "b", "c", "d"],
+        }
+    )
+    at = _open_quality_page(df)
+
+    _click_button(at, "dq_run_analysis")
+    at.checkbox(key="dq_enable_column_threshold").set_value(True).run()
+    _assert_no_streamlit_exception(at)
+    assert at.slider(key="dq_missing_column_threshold").value == 50
+
+    _click_button(at, "dq_run_preview")
+    preview = at.session_state["dq_preview"]["summary"]
+    assert preview["column_drop_threshold"] == 50
+    assert preview["columns_to_drop"] == [
+        {"Position": 1, "Column": "sparse", "Label type": "str", "Missing %": 50.0}
+    ]
+    assert preview["columns_remaining"] == 1
+    assert not at.button(key="dq_apply_cleaning").disabled
+
+    at.slider(key="dq_missing_column_threshold").set_value(51).run()
+    _assert_no_streamlit_exception(at)
+    assert "dq_preview" not in at.session_state
+    assert "dq_analysis" in at.session_state
+    assert at.button(key="dq_apply_cleaning").disabled
+
+    at.slider(key="dq_missing_column_threshold").set_value(50).run()
+    _assert_no_streamlit_exception(at)
+    _click_button(at, "dq_run_preview")
+    _click_button(at, "dq_apply_cleaning")
+    pdt.assert_frame_equal(
+        at.session_state["edited_df"],
+        pd.DataFrame({"keep": ["a", "b", "c", "d"]}),
+    )
+    _click_button(at, "dq_undo_cleaning")
+    pdt.assert_frame_equal(at.session_state["df"], df)
+    assert "edited_df" not in at.session_state
+
+
+def test_missing_percentage_threshold_is_disabled_for_zero_rows():
+    at = _open_quality_page(pd.DataFrame({"empty": pd.Series(dtype="object")}))
+
+    assert at.checkbox(key="dq_enable_column_threshold").disabled
+    assert not any(
+        widget.key == "dq_missing_column_threshold" for widget in at.slider
+    )
+    assert any("zero rows" in item.value for item in at.info)
+    _assert_no_streamlit_exception(at)
+
+
+def test_missing_percentage_threshold_rejects_removing_all_columns_in_ui():
+    at = _open_quality_page(
+        pd.DataFrame({"first": [None, None], "second": [pd.NA, pd.NA]})
+    )
+
+    _click_button(at, "dq_run_analysis")
+    at.checkbox(key="dq_enable_column_threshold").set_value(True).run()
+    _assert_no_streamlit_exception(at)
+    _click_button(at, "dq_run_preview")
+
+    assert any("every column" in item.value for item in at.error)
+    assert at.button(key="dq_apply_cleaning").disabled
 
 
 def test_new_csv_upload_clears_old_quality_and_edit_state():

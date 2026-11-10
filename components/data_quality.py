@@ -433,6 +433,49 @@ def _fill_value(series: pd.Series, strategy: str, constant: str):
     return value
 
 
+def _columns_at_missing_threshold(
+    df: pd.DataFrame,
+    threshold: float | None,
+    treat_blank_strings: bool = False,
+    missing_tokens=(),
+) -> list[tuple[int, float]]:
+    """Return positional columns meeting an inclusive missing percentage threshold."""
+    if threshold is None or df.shape[1] == 0:
+        return []
+    if len(df) == 0:
+        raise ValueError("A missing-percentage threshold cannot be used with zero rows.")
+    threshold = float(threshold)
+    if not np.isfinite(threshold) or threshold < 0 or threshold > 100:
+        raise ValueError("The missing-percentage threshold must be between 0 and 100.")
+
+    columns_to_drop = []
+    for position in range(df.shape[1]):
+        series = df.iloc[:, position]
+        missing_count = int(
+            missing_value_mask(
+                series, treat_blank_strings, missing_tokens
+            ).sum()
+        )
+        missing_percent = 100 * missing_count / len(df)
+        if missing_percent >= threshold:
+            columns_to_drop.append((position, missing_percent))
+
+    if len(columns_to_drop) == df.shape[1]:
+        raise ValueError(
+            "This threshold would remove every column. Choose a higher threshold."
+        )
+    return columns_to_drop
+
+
+def _apply_fill_strategy(series: pd.Series, strategy: str, value=None) -> pd.Series:
+    """Apply one fill strategy while preserving the series' existing dtype."""
+    if strategy == "Forward Fill":
+        return series.ffill()
+    if strategy == "Backward Fill":
+        return series.bfill()
+    return series.fillna(value)
+
+
 def preview_cleaning(
     df: pd.DataFrame,
     settings: dict,
@@ -443,6 +486,15 @@ def preview_cleaning(
         raise ValueError("Run duplicate detection successfully before removing duplicates.")
 
     row_count = len(df)
+    treat_blank_strings = settings.get("treat_blank_strings", False)
+    missing_tokens = settings.get("missing_tokens", ())
+    column_drop_threshold = settings.get("drop_columns_threshold")
+    columns_to_drop = _columns_at_missing_threshold(
+        df,
+        column_drop_threshold,
+        treat_blank_strings,
+        missing_tokens,
+    )
     keep_rows = np.ones(row_count, dtype=bool)
     duplicate_count = 0
     if settings.get("remove_duplicates"):
@@ -454,8 +506,6 @@ def preview_cleaning(
 
     conversions = settings.get("conversions", {})
     date_format = settings.get("date_format")
-    treat_blank_strings = settings.get("treat_blank_strings", False)
-    missing_tokens = settings.get("missing_tokens", ())
     conversion_failures = {}
     conversion_failure_details = {}
     drop_columns = settings.get("drop_missing_columns", [])
@@ -488,9 +538,22 @@ def preview_cleaning(
 
     fill_values = {}
     filled_counts = {}
+    remaining_counts = {}
+    sample_fill_overrides = {}
+    text_actions = settings.get("text_actions", {})
     if missing_action == "Fill values":
         strategy = settings.get("fill_strategy", "Mode")
         constant = settings.get("fill_constant", "")
+        sample_length = min(len(df), PREVIEW_ROWS)
+        preview_source_positions = np.arange(sample_length, dtype=np.intp)
+        retained_row_positions = np.flatnonzero(keep_rows)
+        if settings.get("remove_duplicates"):
+            preview_source_positions = preview_source_positions[
+                ~duplicate_mask[:sample_length]
+            ]
+        preview_retained_offsets = np.searchsorted(
+            retained_row_positions, preview_source_positions
+        )
         for column in settings.get("fill_columns", []):
             if column not in df.columns:
                 continue
@@ -501,12 +564,27 @@ def preview_cleaning(
                 series = _convert_series(series, conversions[column], date_format)
             remaining = series if keep_rows.all() else series.iloc[keep_rows]
             missing_count = int(remaining.isna().sum())
-            filled_counts[column] = missing_count
-            if missing_count:
-                fill_values[column] = _fill_value(remaining, strategy, constant)
+            if strategy in {"Forward Fill", "Backward Fill"}:
+                filled_series = _apply_fill_strategy(remaining, strategy)
+                remaining_count = int(filled_series.isna().sum())
+                filled_counts[column] = missing_count - remaining_count
+                remaining_counts[column] = remaining_count
+                fill_values[column] = strategy
+                if (
+                    text_actions.get("enabled")
+                    and column in settings.get("standardize_columns", [])
+                ):
+                    filled_series = _standardize_series(filled_series, text_actions)
+                sample_fill_overrides[column] = filled_series.iloc[
+                    preview_retained_offsets
+                ].array
+            else:
+                filled_counts[column] = missing_count
+                remaining_counts[column] = 0
+                if missing_count:
+                    fill_values[column] = _fill_value(remaining, strategy, constant)
 
     standardized_counts = {}
-    text_actions = settings.get("text_actions", {})
     if text_actions.get("enabled"):
         for column in settings.get("standardize_columns", []):
             if column not in df.columns:
@@ -522,6 +600,16 @@ def preview_cleaning(
             changed = series.astype("string").ne(standardized).fillna(False)
             standardized_counts[column] = int(changed.sum())
 
+    columns_to_drop_summary = [
+        {
+            "Position": position + 1,
+            "Column": str(df.columns[position]),
+            "Label type": type(df.columns[position]).__name__,
+            "Missing %": missing_percent,
+        }
+        for position, missing_percent in columns_to_drop
+    ]
+
     summary = {
         "rows_before": row_count,
         "rows_after": rows_after_missing,
@@ -530,7 +618,11 @@ def preview_cleaning(
         "conversion_failures": conversion_failures,
         "conversion_failure_details": conversion_failure_details,
         "missing_values_filled": filled_counts,
+        "missing_values_remaining": remaining_counts,
         "text_values_changed": standardized_counts,
+        "column_drop_threshold": column_drop_threshold,
+        "columns_to_drop": columns_to_drop_summary,
+        "columns_remaining": df.shape[1] - len(columns_to_drop),
     }
 
     sample_length = min(len(df), PREVIEW_ROWS)
@@ -540,7 +632,11 @@ def preview_cleaning(
         settings,
         duplicate_mask=sample_duplicate_mask,
         fill_values=fill_values,
+        drop_column_positions=[position for position, _ in columns_to_drop],
     )
+    for column, values in sample_fill_overrides.items():
+        if column in sample.columns:
+            sample[column] = values
     return summary, sample, fill_values
 
 
@@ -549,8 +645,25 @@ def apply_cleaning(
     settings: dict,
     duplicate_mask: np.ndarray | None = None,
     fill_values: dict | None = None,
+    drop_column_positions: list[int] | None = None,
 ) -> pd.DataFrame:
     """Return a cleaned dataframe without mutating the supplied dataframe."""
+    if drop_column_positions is None:
+        columns_to_drop = _columns_at_missing_threshold(
+            df,
+            settings.get("drop_columns_threshold"),
+            settings.get("treat_blank_strings", False),
+            settings.get("missing_tokens", ()),
+        )
+        drop_column_positions = [position for position, _ in columns_to_drop]
+
+    keep_columns = None
+    if drop_column_positions:
+        keep_columns = np.ones(df.shape[1], dtype=bool)
+        keep_columns[drop_column_positions] = False
+        if not keep_columns.any():
+            raise ValueError("Cleaning cannot remove every column.")
+
     result = df.copy(deep=False)
     conversions = settings.get("conversions", {})
     date_format = settings.get("date_format")
@@ -593,13 +706,17 @@ def apply_cleaning(
             series = _replace_recognized_blank_like(
                 result[column], treat_blank_strings, missing_tokens
             )
+            strategy = settings.get("fill_strategy", "Mode")
+            if strategy in {"Forward Fill", "Backward Fill"}:
+                result[column] = _apply_fill_strategy(series, strategy)
+                continue
             if values is None and not series.isna().any():
                 continue
             value = values.get(column) if values is not None else None
             if value is None or pd.isna(value):
                 value = _fill_value(
                     series,
-                    settings.get("fill_strategy", "Mode"),
+                    strategy,
                     settings.get("fill_constant", ""),
                 )
             if isinstance(value, (bool, np.bool_)) and ptypes.is_object_dtype(series.dtype):
@@ -619,5 +736,8 @@ def apply_cleaning(
                     result[column], treat_blank_strings, missing_tokens
                 )
                 result[column] = _standardize_series(series, text_actions)
+
+    if keep_columns is not None:
+        result = result.iloc[:, keep_columns]
 
     return result
