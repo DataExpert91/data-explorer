@@ -6,11 +6,15 @@ from pandas.api import types as ptypes
 
 from components.data_quality import (
     apply_cleaning,
-    bump_data_version,
     dataframe_signature,
-    ensure_data_version,
     preview_cleaning,
     profile_dataframe,
+)
+from components.session_data import (
+    apply_cleaned_dataframe,
+    ensure_data_version,
+    get_active_dataframe,
+    undo_cleaned_dataframe,
 )
 
 
@@ -24,7 +28,7 @@ if "df" not in st.session_state:
     st.warning("No data loaded. Please open the main page first.")
     st.stop()
 
-current_df = st.session_state.get("edited_df", st.session_state["df"])
+current_df = get_active_dataframe(st.session_state)
 ensure_data_version(st.session_state, current_df)
 current_signature = dataframe_signature(current_df, st.session_state["data_version"])
 has_duplicate_labels = not current_df.columns.is_unique
@@ -382,12 +386,7 @@ if st.button(
             duplicate_mask=analysis["duplicate_mask"],
             fill_values=preview_state["fill_values"],
         )
-        st.session_state["dq_undo"] = {
-            "had_edited_df": "edited_df" in st.session_state,
-            "previous_df": current_df,
-        }
-        st.session_state["edited_df"] = cleaned_df
-        bump_data_version(st.session_state, cleaned_df)
+        apply_cleaned_dataframe(st.session_state, cleaned_df)
         reset_downstream_widgets()
         st.rerun()
     except Exception as exc:
@@ -400,12 +399,6 @@ if undo_available:
         "Edits made after that Apply will also be discarded by Undo."
     )
 if st.button("Undo last cleaning", key="dq_undo_cleaning", disabled=not undo_available):
-    undo = st.session_state.pop("dq_undo")
-    if undo["had_edited_df"]:
-        st.session_state["edited_df"] = undo["previous_df"]
-    else:
-        st.session_state.pop("edited_df", None)
-    restored_df = st.session_state.get("edited_df", st.session_state["df"])
-    bump_data_version(st.session_state, restored_df)
+    undo_cleaned_dataframe(st.session_state)
     reset_downstream_widgets()
     st.rerun()

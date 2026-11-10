@@ -9,6 +9,7 @@ import streamlit as st
 from pandas.api import types as ptypes
 
 from components.filters import sidebar_filters
+from components.session_data import get_active_dataframe
 
 COUNT_ROWS = "Count of rows"
 NO_COLOR = "(none)"
@@ -23,7 +24,7 @@ if "df" not in st.session_state:
     st.stop()
 
 # the same table and the same filters as on the Data Explorer page
-current_df = st.session_state.get("edited_df", st.session_state["df"])
+current_df = get_active_dataframe(st.session_state)
 filtered_df = sidebar_filters(current_df)
 if not current_df.columns.is_unique:
     st.stop()

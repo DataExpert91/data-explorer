@@ -9,34 +9,11 @@ import numpy as np
 import pandas as pd
 from pandas.api import types as ptypes
 
+from .session_data import bump_data_version, ensure_data_version
+
 
 SAMPLE_SIZE = 500
 PREVIEW_ROWS = 12
-
-
-def bump_data_version(session_state, active_df: pd.DataFrame | None = None) -> int:
-    """Record a controlled dataset replacement and discard derived quality results."""
-    try:
-        version = int(session_state.get("data_version", 0))
-    except (TypeError, ValueError):
-        version = 0
-    version += 1
-    session_state["data_version"] = version
-    if active_df is not None:
-        session_state["data_version_df_id"] = id(active_df)
-    session_state.pop("dq_analysis", None)
-    session_state.pop("dq_preview", None)
-    return version
-
-
-def ensure_data_version(session_state, active_df: pd.DataFrame) -> int:
-    """Notice dataframe replacement by existing pages that assign edited_df."""
-    if (
-        "data_version" not in session_state
-        or session_state.get("data_version_df_id") != id(active_df)
-    ):
-        return bump_data_version(session_state, active_df)
-    return int(session_state["data_version"])
 
 
 def _bounded_value_repr(value) -> str:

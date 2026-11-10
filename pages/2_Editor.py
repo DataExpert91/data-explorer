@@ -9,6 +9,8 @@ import io
 
 import streamlit as st
 
+from components.session_data import get_active_dataframe, set_active_dataframe
+
 st.title("Editor")
 
 if "df" not in st.session_state:
@@ -17,23 +19,26 @@ if "df" not in st.session_state:
 
 # the working copy of the table
 if "edited_df" not in st.session_state:
-    st.session_state["edited_df"] = st.session_state["df"].copy()
+    set_active_dataframe(
+        st.session_state,
+        get_active_dataframe(st.session_state).copy(),
+    )
 
 # While the user stays on this page, the editor must always receive the SAME
 # base table. When the user arrives (the editor has no state yet), we restart
 # the base from the saved table.
 if "editor" not in st.session_state or "editor_base" not in st.session_state:
-    st.session_state["editor_base"] = st.session_state["edited_df"].copy()
+    st.session_state["editor_base"] = get_active_dataframe(st.session_state).copy()
 
 
 def commit(new_df):
     """Make new_df the current table and restart the editor from it."""
-    st.session_state["edited_df"] = new_df
+    set_active_dataframe(st.session_state, new_df)
     st.session_state["editor_base"] = new_df.copy()
     st.session_state.pop("editor", None)
 
 
-current = st.session_state["edited_df"]
+current = get_active_dataframe(st.session_state)
 
 # ---------- Manage columns ----------
 with st.expander("Manage columns"):
@@ -133,7 +138,7 @@ edited_df = edited_display_df.copy(deep=False)
 edited_df.columns = original_columns
 
 # save the edits so they survive leaving the page
-st.session_state["edited_df"] = edited_df
+set_active_dataframe(st.session_state, edited_df)
 
 st.caption(f"{edited_df.shape[0]} rows, {edited_df.shape[1]} columns")
 

@@ -7,8 +7,6 @@ from components.data_quality import (
     _fill_value,
     _standardize_series,
     apply_cleaning,
-    bump_data_version,
-    ensure_data_version,
     preview_cleaning,
     profile_dataframe,
 )
@@ -204,70 +202,3 @@ def test_apply_cleaning_fills_object_boolean_values_as_booleans():
     pdt.assert_frame_equal(df, original)
 
 
-def test_bump_data_version_increments_and_clears_quality_results():
-    active_df = pd.DataFrame({"value": [1]})
-    state = {
-        "data_version": 2,
-        "dq_analysis": {"report": "old"},
-        "dq_preview": {"summary": "old"},
-    }
-
-    version = bump_data_version(state, active_df)
-
-    assert version == 3
-    assert state["data_version"] == 3
-    assert state["data_version_df_id"] == id(active_df)
-    assert "dq_analysis" not in state
-    assert "dq_preview" not in state
-
-
-def test_ensure_data_version_initializes_state():
-    active_df = pd.DataFrame({"value": [1]})
-    state = {
-        "dq_analysis": {"report": "old"},
-        "dq_preview": {"summary": "old"},
-    }
-
-    version = ensure_data_version(state, active_df)
-
-    assert version == 1
-    assert state["data_version"] == 1
-    assert state["data_version_df_id"] == id(active_df)
-    assert "dq_analysis" not in state
-    assert "dq_preview" not in state
-
-
-def test_ensure_data_version_does_not_increment_for_same_dataframe():
-    active_df = pd.DataFrame({"value": [1]})
-    analysis = {"report": "current"}
-    preview = {"summary": "current"}
-    state = {
-        "data_version": 4,
-        "data_version_df_id": id(active_df),
-        "dq_analysis": analysis,
-        "dq_preview": preview,
-    }
-
-    version = ensure_data_version(state, active_df)
-
-    assert version == 4
-    assert state["dq_analysis"] is analysis
-    assert state["dq_preview"] is preview
-
-
-def test_ensure_data_version_increments_and_invalidates_on_replacement():
-    previous_df = pd.DataFrame({"value": [1]})
-    active_df = pd.DataFrame({"value": [2]})
-    state = {
-        "data_version": 4,
-        "data_version_df_id": id(previous_df),
-        "dq_analysis": {"report": "old"},
-        "dq_preview": {"summary": "old"},
-    }
-
-    version = ensure_data_version(state, active_df)
-
-    assert version == 5
-    assert state["data_version_df_id"] == id(active_df)
-    assert "dq_analysis" not in state
-    assert "dq_preview" not in state

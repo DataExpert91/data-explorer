@@ -8,7 +8,11 @@ import pandas as pd
 import streamlit as st
 
 from components.filters import sidebar_filters
-from components.data_quality import bump_data_version
+from components.session_data import (
+    bump_data_version,
+    get_active_dataframe,
+    replace_source_dataframe,
+)
 
 DEMO_PATH = "data/clean/superstore_clean.csv"
 
@@ -28,12 +32,14 @@ if uploaded_file is not None:
         else:
             df = pd.read_excel(uploaded_file)
 
-        st.session_state["df"] = df
-        st.session_state["source"] = uploaded_file.name
-        st.session_state["file_key"] = file_key
+        replace_source_dataframe(
+            st.session_state,
+            df,
+            source=uploaded_file.name,
+            file_key=file_key,
+        )
 
         # a new file means the old edits and filter choices no longer apply
-        st.session_state.pop("edited_df", None)
         st.session_state.pop("editor", None)
         st.session_state.pop("filters", None)
         st.session_state.pop("filter_cols", None)
@@ -47,16 +53,20 @@ if uploaded_file is not None:
 
 elif "df" not in st.session_state:
     # first visit and no upload: load the demo file once
-    st.session_state["df"] = pd.read_csv(
+    demo_df = pd.read_csv(
         DEMO_PATH,
         parse_dates=["Order Date", "Ship Date"],
         dtype={"Postal Code": str},
     )
-    st.session_state["source"] = "demo data (superstore_clean.csv)"
+    replace_source_dataframe(
+        st.session_state,
+        demo_df,
+        source="demo data (superstore_clean.csv)",
+    )
     bump_data_version(st.session_state, st.session_state["df"])
 
 # the table we work with: the edited version if it exists, otherwise the original
-current_df = st.session_state.get("edited_df", st.session_state["df"])
+current_df = get_active_dataframe(st.session_state)
 
 st.caption(f"Current data: {st.session_state['source']}")
 if "edited_df" in st.session_state:
