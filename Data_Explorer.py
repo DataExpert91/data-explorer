@@ -66,4 +66,15 @@ if "edited_df" in st.session_state:
 filtered_df = sidebar_filters(current_df)
 
 st.caption(f"Showing {len(filtered_df)} of {len(current_df)} rows")
-st.dataframe(filtered_df)
+
+# Streamlit's dataframe renderer requires unique column labels. Keep the active
+# dataset untouched and rename columns only on a shallow copy used for display.
+display_df = filtered_df
+if not filtered_df.columns.is_unique:
+    display_df = filtered_df.copy(deep=False)
+    display_df.columns = [
+        f"{position}: {column}"
+        for position, column in enumerate(filtered_df.columns, start=1)
+    ]
+
+st.dataframe(display_df)

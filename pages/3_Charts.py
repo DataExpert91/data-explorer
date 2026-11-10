@@ -25,6 +25,8 @@ if "df" not in st.session_state:
 # the same table and the same filters as on the Data Explorer page
 current_df = st.session_state.get("edited_df", st.session_state["df"])
 filtered_df = sidebar_filters(current_df)
+if not current_df.columns.is_unique:
+    st.stop()
 
 st.caption(
     f"Charts use {len(filtered_df)} of {len(current_df)} rows. "

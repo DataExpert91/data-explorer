@@ -2,6 +2,7 @@ from datetime import date
 from pathlib import Path
 
 import pandas as pd
+import pandas.testing as pdt
 from streamlit.testing.v1 import AppTest
 
 
@@ -117,3 +118,47 @@ def test_single_unique_and_all_missing_numeric_columns_do_not_filter_rows():
     assert not at.exception
     assert len(at.slider) == 0
     assert _visible_row_ids(at) == [0, 1, 2]
+
+
+def test_data_explorer_disables_filters_for_duplicate_column_labels():
+    df = pd.DataFrame(
+        [["A", 1], ["B", 2]],
+        columns=["Duplicate", "Duplicate"],
+    )
+
+    at = _open_explorer(df)
+
+    assert not at.exception
+    assert any(
+        "Filtering is unavailable" in warning.value
+        and "duplicate column names" in warning.value
+        for warning in at.warning
+    )
+    assert len(at.multiselect) == 0
+    assert len(at.slider) == 0
+    assert len(at.date_input) == 0
+    displayed_df = at.dataframe[0].value
+    assert displayed_df.columns.is_unique
+    assert displayed_df.to_numpy().tolist() == df.to_numpy().tolist()
+    pdt.assert_frame_equal(at.session_state["df"], df)
+
+
+def test_charts_stops_before_chart_controls_for_duplicate_column_labels():
+    df = pd.DataFrame(
+        [["A", 1], ["B", 2]],
+        columns=["Duplicate", "Duplicate"],
+    )
+    at = _open_explorer(df)
+
+    at.switch_page("pages/3_Charts.py").run()
+
+    assert not at.exception
+    assert any(
+        "Filtering is unavailable" in warning.value
+        and "duplicate column names" in warning.value
+        for warning in at.warning
+    )
+    assert len(at.multiselect) == 0
+    assert len(at.slider) == 0
+    assert len(at.date_input) == 0
+    assert len(at.selectbox) == 0

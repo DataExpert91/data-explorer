@@ -8,6 +8,13 @@ from pandas.api import types as ptypes
 
 def sidebar_filters(current_df):
     """Draw the filter widgets in the sidebar and return the filtered table."""
+    if not current_df.columns.is_unique:
+        st.warning(
+            "Filtering is unavailable because this dataset has duplicate column names. "
+            "Rename the duplicate column names to enable filtering."
+        )
+        return current_df
+
     st.sidebar.header("Filters")
 
     # saved filter values: {column name: value}. Widgets forget their value when
