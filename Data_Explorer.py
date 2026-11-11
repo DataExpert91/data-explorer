@@ -8,6 +8,7 @@ import pandas as pd
 import streamlit as st
 
 from components.filters import sidebar_filters
+from components.i18n import render_language_selector, t
 from components.session_data import (
     bump_data_version,
     get_active_dataframe,
@@ -17,9 +18,12 @@ from components.workflow import render_workflow
 
 DEMO_PATH = "data/clean/superstore_clean.csv"
 
-st.title("Data Explorer")
+st.title(t("explorer.title"))
+render_language_selector()
 
-uploaded_file = st.file_uploader("Upload a CSV or Excel file", type=["csv", "xlsx"])
+uploaded_file = st.file_uploader(
+    t("explorer.upload"), type=["csv", "xlsx"]
+)
 
 if uploaded_file is not None:
     # File ID distinguishes new uploads that reuse a name and size.
@@ -70,14 +74,16 @@ elif "df" not in st.session_state:
 current_df = get_active_dataframe(st.session_state)
 render_workflow("upload")
 
-st.caption(f"Current data: {st.session_state['source']}")
+st.caption(t("explorer.current_data", source=st.session_state["source"]))
 if "edited_df" in st.session_state:
-    st.caption("Showing the table with your edits from the Editor page.")
+    st.caption(t("explorer.edited_caption"))
 
 # filters are drawn in the sidebar; the function returns the filtered table
 filtered_df = sidebar_filters(current_df)
 
-st.caption(f"Showing {len(filtered_df)} of {len(current_df)} rows")
+st.caption(
+    t("explorer.row_count", shown=len(filtered_df), total=len(current_df))
+)
 
 # Streamlit's dataframe renderer requires unique column labels. Keep the active
 # dataset untouched and rename columns only on a shallow copy used for display.

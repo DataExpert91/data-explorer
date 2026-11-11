@@ -7,17 +7,18 @@ import pandas as pd
 import streamlit as st
 from pandas.api import types as ptypes
 
+from components.i18n import t
+
 
 def sidebar_filters(current_df):
     """Draw the filter widgets in the sidebar and return the filtered table."""
     if not current_df.columns.is_unique:
         st.warning(
-            "Filtering is unavailable because this dataset has duplicate column names. "
-            "Rename the duplicate column names to enable filtering."
+            t("filters.duplicate_warning")
         )
         return current_df
 
-    st.sidebar.header("Filters")
+    st.sidebar.header(t("filters.title"))
 
     # saved filter values: {column name: value}. Widgets forget their value when
     # the user leaves the page, so we keep a copy here and restore it on return.
@@ -84,7 +85,7 @@ def sidebar_filters(current_df):
         ]
 
     chosen_positions = st.sidebar.multiselect(
-        "Filter by columns",
+        t("filters.columns"),
         options=list(range(len(columns))),
         key="w_filter_cols",
         format_func=format_column_position,

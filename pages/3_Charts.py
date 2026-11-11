@@ -12,6 +12,7 @@ import streamlit as st
 from pandas.api import types as ptypes
 
 from components.filters import sidebar_filters
+from components.i18n import render_language_selector, t
 from components.session_data import get_active_dataframe
 from components.workflow import mark_workflow_stage_complete, render_workflow
 
@@ -29,10 +30,11 @@ DATE_FREQ = {"Day": "D", "Week": "W", "Month": "M", "Quarter": "Q", "Year": "Y"}
 AGG_FUNCS = {"Sum": "sum", "Average": "mean", "Median": "median"}
 TEMPLATE = "plotly_white"
 
-st.title("Charts")
+st.title(t("charts.title"))
+render_language_selector()
 
 if "df" not in st.session_state:
-    st.warning("No data loaded. Please open the main page first.")
+    st.warning(t("charts.no_data"))
     st.stop()
 
 # the same table and the same filters as on the Data Explorer page
@@ -43,7 +45,7 @@ if not current_df.columns.is_unique:
     st.stop()
 
 if filtered_df.empty:
-    st.info("No rows match the current filters.")
+    st.info(t("charts.no_rows"))
     st.stop()
 
 # saved chart settings: widgets forget their value when the page is left
@@ -91,11 +93,19 @@ def format_column(column):
 
 
 def format_y_choice(column):
-    return COUNT_ROWS_LABEL if is_chart_choice(column, COUNT_ROWS) else format_column(column)
+    return (
+        t("charts.choice.count_rows")
+        if is_chart_choice(column, COUNT_ROWS)
+        else format_column(column)
+    )
 
 
 def format_optional_column(column):
-    return NO_COLOR_LABEL if is_chart_choice(column, NO_COLOR) else format_column(column)
+    return (
+        t("charts.choice.none")
+        if is_chart_choice(column, NO_COLOR)
+        else format_column(column)
+    )
 
 
 def is_chart_choice(value, choice):
@@ -120,27 +130,27 @@ def chart_row_mask(source_df, required_fields):
 def show_chart_row_feedback(used_rows, missing_rows, missing_roles, top_n_rows=0):
     if used_rows == 0:
         if missing_roles:
-            fields = ", ".join(missing_roles)
-            st.info(
-                "No observations remain after excluding rows with missing "
-                f"chart fields ({fields})."
+            fields = ", ".join(
+                t(f"charts.role.{role}") for role in missing_roles
             )
+            st.info(t("charts.no_observations_missing", fields=fields))
         else:
-            st.info("No observations remain for this chart.")
+            st.info(t("charts.no_observations"))
         st.stop()
 
     st.caption(
-        f"Charts use {len(filtered_df)} of {len(current_df)} rows after shared filters; "
-        f"the chart represents {used_rows} of {len(filtered_df)} filtered rows."
+        t(
+            "charts.row_count",
+            filtered=len(filtered_df),
+            total=len(current_df),
+            used=used_rows,
+        )
     )
     if missing_rows:
-        fields = ", ".join(missing_roles)
-        st.caption(
-            f"{missing_rows} rows excluded because selected chart fields are "
-            f"missing ({fields})."
-        )
+        fields = ", ".join(t(f"charts.role.{role}") for role in missing_roles)
+        st.caption(t("charts.rows_missing", count=missing_rows, fields=fields))
     if top_n_rows:
-        st.caption(f"Top N omits {top_n_rows} otherwise eligible rows.")
+        st.caption(t("charts.topn_omits", count=top_n_rows))
 
 
 # Plotly Express can treat an integer column label as a positional selector.
@@ -162,9 +172,10 @@ num_cols = [
 ]
 
 chart_type = choose(
-    "Chart type",
+    t("charts.label.chart_type"),
     ["Bar", "Line", "Scatter", "Histogram", "Box Plot", "Correlation Heatmap"],
     "w_chart_type", "Bar",
+    format_func=lambda value: t(f"charts.type.{value}"),
 )
 prefix = {
     "Box Plot": "w_Box_Plot",
@@ -197,12 +208,16 @@ if chart_type in ("Bar", "Line"):
     # ----- aggregated charts: group by X, then sum / average / median of Y -----
     x_default = first_in(["Order Date" if chart_type == "Line" else "Category"], all_cols)
     x = choose(
-        "X axis", all_cols, f"{prefix}_x", x_default, format_func=format_column
+        t("charts.label.x_axis"),
+        all_cols,
+        f"{prefix}_x",
+        x_default,
+        format_func=format_column,
     )
 
     y_options = [COUNT_ROWS] + [c for c in num_cols if c != x]
     y = choose(
-        "Y axis",
+        t("charts.label.y_axis"),
         y_options,
         f"{prefix}_y",
         first_in(["Sales"], y_options),
@@ -211,17 +226,29 @@ if chart_type in ("Bar", "Line"):
 
     func_name = None
     if not is_chart_choice(y, COUNT_ROWS):
-        func_name = choose("Aggregation", list(AGG_FUNCS), f"{prefix}_agg", "Sum")
+        func_name = choose(
+            t("charts.label.aggregation"),
+            list(AGG_FUNCS),
+            f"{prefix}_agg",
+            "Sum",
+            format_func=lambda value: t(f"charts.aggregation.{value}"),
+        )
 
     is_date = ptypes.is_datetime64_any_dtype(filtered_df[x])
     data = plotting_copy(filtered_df)
     x_key = plot_column_by_label[x]
     if is_date:
-        freq = choose("Group dates by", list(DATE_FREQ), f"{prefix}_freq", "Month")
+        freq = choose(
+            t("charts.label.date_group"),
+            list(DATE_FREQ),
+            f"{prefix}_freq",
+            "Month",
+            format_func=lambda value: t(f"charts.date.{value}"),
+        )
         data[x_key] = data[x_key].dt.to_period(DATE_FREQ[freq]).dt.to_timestamp()
 
     color = choose(
-        "Color by (optional)",
+        t("charts.label.color"),
         color_choices([x, y]),
         f"{prefix}_color",
         NO_COLOR,
@@ -230,16 +257,14 @@ if chart_type in ("Bar", "Line"):
     bar_mode = None
     if chart_type == "Bar":
         bar_mode = choose(
-            "Bar display mode",
+            t("charts.label.bar_mode"),
             ["Grouped", "Stacked"],
             f"{prefix}_mode",
             "Grouped",
+            format_func=lambda value: t(f"charts.mode.{value}"),
         )
         if bar_mode == "Stacked" and func_name in {"Average", "Median"}:
-            st.info(
-                "The stacked height represents the sum of subgroup "
-                "averages/medians, not the overall category average/median."
-            )
+            st.info(t("charts.stacked_average_note"))
     color_arg = None if is_chart_choice(color, NO_COLOR) else color
     x_key = plot_column_by_label[x]
     y_key = COUNT_ROWS_COLUMN if is_chart_choice(y, COUNT_ROWS) else plot_column_by_label[y]
@@ -259,7 +284,7 @@ if chart_type in ("Bar", "Line"):
 
     if is_chart_choice(y, COUNT_ROWS):
         agg = data.groupby(group_cols).size().reset_index(name=y_key)
-        y_label = COUNT_ROWS_LABEL
+        y_label = t("charts.choice.count_rows")
         valid_value_rows = valid_rows
     else:
         if func_name == "Sum":
@@ -270,7 +295,10 @@ if chart_type in ("Bar", "Line"):
             )
         else:
             agg = data.groupby(group_cols)[y_key].agg(AGG_FUNCS[func_name]).reset_index()
-        y_label = f"{func_name} of {format_column(y)}"
+        y_label = (
+            f"{t(f'charts.aggregation.{func_name}')} "
+            f"{t('charts.aggregation.of')} {format_column(y)}"
+        )
         valid_value_rows = valid_rows
 
     top_n_row_count = valid_row_count
@@ -279,7 +307,12 @@ if chart_type in ("Bar", "Line"):
         if not is_date:
             # too many bars are unreadable: keep the top N values of X
             agg[x_key] = agg[x_key].astype(str)
-            top_n = choose("Show top N values", [5, 10, 15, 20, 30, 50], f"{prefix}_topn", 15)
+            top_n = choose(
+                t("charts.label.top_n"),
+                [5, 10, 15, 20, 30, 50],
+                f"{prefix}_topn",
+                15,
+            )
             totals = agg.groupby(x_key)[y_key].sum().nlargest(top_n)
             agg = agg[agg[x_key].isin(totals.index)]
             order = {x_key: list(totals.index)}  # biggest bar first
@@ -315,23 +348,23 @@ if chart_type in ("Bar", "Line"):
 
 elif not num_cols:
     if chart_type == "Correlation Heatmap":
-        st.info("Correlation Heatmap requires at least two numeric columns.")
+        st.info(t("charts.heatmap_needs_two"))
     else:
-        st.info("This chart needs a numeric column, and the table has none.")
+        st.info(t("charts.needs_numeric"))
     st.stop()
 
 elif chart_type == "Scatter":
     # ----- scatter: every row is a point -----
     x = choose(
-        "X axis (number)", num_cols, f"{prefix}_x", first_in(["Sales"], num_cols),
+        t("charts.label.x_number"), num_cols, f"{prefix}_x", first_in(["Sales"], num_cols),
         format_func=format_column,
     )
     y = choose(
-        "Y axis (number)", num_cols, f"{prefix}_y", first_in(["Profit"], num_cols),
+        t("charts.label.y_number"), num_cols, f"{prefix}_y", first_in(["Profit"], num_cols),
         format_func=format_column,
     )
     color = choose(
-        "Color by (optional)", color_choices([x, y]), f"{prefix}_color", NO_COLOR,
+        t("charts.label.color"), color_choices([x, y]), f"{prefix}_color", NO_COLOR,
         format_func=format_optional_column,
     )
     chart_df = plotting_copy(filtered_df)
@@ -358,11 +391,11 @@ elif chart_type == "Scatter":
 elif chart_type == "Histogram":
     # ----- histogram: how the values of one column are distributed -----
     x = choose(
-        "Column (number)", num_cols, f"{prefix}_x", first_in(["Sales"], num_cols),
+        t("charts.label.column_number"), num_cols, f"{prefix}_x", first_in(["Sales"], num_cols),
         format_func=format_column,
     )
     color = choose(
-        "Color by (optional)", color_choices([x]), f"{prefix}_color", NO_COLOR,
+        t("charts.label.color"), color_choices([x]), f"{prefix}_color", NO_COLOR,
         format_func=format_optional_column,
     )
     chart_df = plotting_copy(filtered_df)
@@ -386,7 +419,7 @@ elif chart_type == "Histogram":
 
 elif chart_type == "Correlation Heatmap":
     if len(num_cols) < 2:
-        st.info("Correlation Heatmap requires at least two numeric columns.")
+        st.info(t("charts.heatmap_needs_two"))
         st.stop()
 
     selected_key = f"{prefix}_columns"
@@ -408,7 +441,7 @@ elif chart_type == "Correlation Heatmap":
             st.session_state[selected_key] = valid_selection
 
     selected_columns = st.multiselect(
-        "Numeric columns",
+        t("charts.label.numeric_columns"),
         num_cols,
         key=selected_key,
         format_func=format_column,
@@ -416,7 +449,7 @@ elif chart_type == "Correlation Heatmap":
     )
     saved[selected_key] = selected_columns
     if len(selected_columns) < 2:
-        st.info("Select at least two numeric columns to calculate correlations.")
+        st.info(t("charts.select_two"))
         st.stop()
 
     chart_df = plotting_copy(filtered_df)
@@ -425,7 +458,7 @@ elif chart_type == "Correlation Heatmap":
     display_labels = [format_column(column) for column in selected_columns]
     correlation.index = display_labels
     correlation.columns = display_labels
-    st.caption("Pearson correlation using pairwise complete observations.")
+    st.caption(t("charts.pairwise"))
     fig = px.imshow(
         correlation,
         color_continuous_scale="RdBu",
@@ -434,28 +467,32 @@ elif chart_type == "Correlation Heatmap":
         zmax=1,
         text_auto=".2f",
         aspect="auto",
-        labels={"x": "Column", "y": "Column", "color": "Pearson r"},
+        labels={
+            "x": t("charts.axis.column"),
+            "y": t("charts.axis.column"),
+            "color": t("charts.axis.correlation"),
+        },
         template=TEMPLATE,
     )
 
 else:
     # ----- box plot: distribution of a numeric column, optionally grouped -----
     y = choose(
-        "Numeric column",
+        t("charts.label.numeric_column"),
         num_cols,
         f"{prefix}_y",
         first_in(["Sales"], num_cols),
         format_func=format_column,
     )
     group_by = choose(
-        "Group by (optional)",
+        t("charts.label.group_by"),
         categorical_choices([y]),
         f"{prefix}_group",
         NO_COLOR,
         format_func=format_optional_column,
     )
     color = choose(
-        "Color by (optional)",
+        t("charts.label.color"),
         color_choices([y, group_by]),
         f"{prefix}_color",
         NO_COLOR,

@@ -179,7 +179,7 @@ def test_charts_stops_before_chart_controls_for_duplicate_column_labels():
     assert len(at.multiselect) == 0
     assert len(at.slider) == 0
     assert len(at.date_input) == 0
-    assert len(at.selectbox) == 0
+    assert [widget.key for widget in at.selectbox] == ["language_selector_widget"]
 
 
 def test_filter_column_named_filter_cols_does_not_collide_with_selector():

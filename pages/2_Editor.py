@@ -10,6 +10,7 @@ import io
 import pandas as pd
 import streamlit as st
 
+from components.i18n import render_language_selector, t
 from components.session_data import (
     adopt_equivalent_dataframe_reference,
     bump_data_version,
@@ -19,10 +20,11 @@ from components.session_data import (
 )
 from components.workflow import render_workflow, sync_workflow_state
 
-st.title("Editor")
+st.title(t("editor.title"))
+render_language_selector()
 
 if "df" not in st.session_state:
-    st.warning("No data loaded. Please open the main page first.")
+    st.warning(t("dq.no_data"))
     st.stop()
 
 # the working copy of the table
@@ -196,18 +198,22 @@ def _save_protected_positions(dataframe, positions, update_widget=True):
     ]
 
 # ---------- Manage columns ----------
-with st.expander("Manage columns"):
+with st.expander(t("editor.manage_columns")):
     with st.form("add_column_form", clear_on_submit=True):
-        new_name = st.text_input("New column name")
-        new_type = st.selectbox("Column type", ["Text", "Number"])
-        add_clicked = st.form_submit_button("Add column")
+        new_name = st.text_input(t("editor.new_column_name"))
+        new_type = st.selectbox(
+            t("editor.column_type"),
+            ["Text", "Number"],
+            format_func=lambda value: t(f"editor.type.{value}"),
+        )
+        add_clicked = st.form_submit_button(t("editor.add_column"))
 
     if add_clicked:
         name = new_name.strip()
         if not name:
-            st.error("Please enter a column name.")
+            st.error(t("editor.name_required"))
         elif name in current.columns:
-            st.error(f"Column '{name}' already exists.")
+            st.error(t("editor.name_exists", name=name))
         else:
             updated = current.copy()
             updated[name] = "" if new_type == "Text" else 0.0
@@ -220,13 +226,13 @@ with st.expander("Manage columns"):
 
     with st.form("delete_columns_form", clear_on_submit=True):
         to_delete = st.multiselect(
-            "Columns to delete",
+            t("editor.columns_to_delete"),
             options=column_positions,
             format_func=_format_column_position,
             key="w_delete_column_positions",
         )
         delete_clicked = st.form_submit_button(
-            "Delete selected columns", key="delete_columns_submit"
+            t("editor.delete_selected"), key="delete_columns_submit"
         )
 
     if delete_clicked and to_delete:
@@ -234,7 +240,7 @@ with st.expander("Manage columns"):
             position for position in column_positions if position not in to_delete
         ]
         if not remaining_positions:
-            st.error("A table needs at least one column.")
+            st.error(t("editor.last_column"))
         else:
             updated = current.iloc[:, remaining_positions].copy()
             selected_protected = st.session_state.get(
@@ -251,7 +257,7 @@ with st.expander("Manage columns"):
 
 # ---------- Protected columns ----------
 protected_positions = st.sidebar.multiselect(
-    "Protected columns (cannot be edited)",
+    t("editor.protected_columns"),
     options=column_positions,
     key="w_protected_positions",
     format_func=_format_column_position,
@@ -327,27 +333,33 @@ else:
                 "signature": delta_signature,
             }
 
-st.caption(f"{edited_df.shape[0]} rows, {edited_df.shape[1]} columns")
+st.caption(
+    t(
+        "editor.row_column_count",
+        rows=edited_df.shape[0],
+        columns=edited_df.shape[1],
+    )
+)
 
 # ---------- Download ----------
-st.subheader("Download")
+st.subheader(t("editor.download"))
 
 # CSV is fast, so the button is always there.
 # utf-8-sig makes Excel show non-English letters correctly.
 st.download_button(
-    "Download CSV",
+    t("editor.download_csv"),
     data=edited_df.to_csv(index=False).encode("utf-8-sig"),
     file_name="edited_data.csv",
     mime="text/csv",
 )
 
 # Building an Excel file takes a couple of seconds, so it is done on request only.
-if st.button("Prepare Excel file"):
-    with st.spinner("Building the Excel file..."):
+if st.button(t("editor.prepare_excel")):
+    with st.spinner(t("editor.build_excel")):
         buffer = io.BytesIO()
         edited_df.to_excel(buffer, index=False, engine="openpyxl")
     st.download_button(
-        "Download Excel",
+        t("editor.download_excel"),
         data=buffer.getvalue(),
         file_name="edited_data.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import streamlit as st
 
+from components.i18n import t
+
 WORKFLOW_STATE_KEY = "guided_workflow"
 COMPLETED = "Completed"
 IN_PROGRESS = "In Progress"
@@ -113,24 +115,31 @@ def render_workflow(current_stage=None):
     has_data = state.get("df") is not None
 
     with st.container(border=True):
-        st.markdown("**Guided workflow**")
+        st.markdown(f"**{t('workflow.title')}**")
         columns = st.columns(3)
         for index, (stage_id, title, page) in enumerate(WORKFLOW_STAGES):
             column = columns[index % 3]
             with column:
-                st.markdown(f"**{index + 1}. {title}**")
-                st.caption(statuses[stage_id])
+                st.markdown(
+                    f"**{index + 1}. {t(f'workflow.stage.{stage_id}')}**"
+                )
+                status_key = {
+                    NOT_STARTED: "workflow.status.not_started",
+                    IN_PROGRESS: "workflow.status.in_progress",
+                    COMPLETED: "workflow.status.completed",
+                }[statuses[stage_id]]
+                st.caption(t(status_key))
                 if page is not None:
                     st.page_link(
                         page,
-                        label="Open",
+                        label=t("common.open"),
                         disabled=not workflow_stage_available(state, stage_id),
                     )
                 else:
-                    st.caption("Export workflow coming later")
+                    st.caption(t("workflow.export_later"))
 
         st.page_link(
             "pages/2_Editor.py",
-            label="Open Editor",
+            label=t("common.open_editor"),
             disabled=not has_data,
         )

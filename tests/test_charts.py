@@ -825,7 +825,7 @@ def test_duplicate_column_labels_stop_chart_creation(monkeypatch):
     assert not at.exception
     assert figures == []
     assert any("Filtering is unavailable" in item.value for item in at.warning)
-    assert len(at.selectbox) == 0
+    assert [widget.key for widget in at.selectbox] == ["language_selector_widget"]
 
 
 def _open_charts_without_chart(df, monkeypatch):
