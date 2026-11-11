@@ -159,13 +159,35 @@ num_cols = [
     if ptypes.is_numeric_dtype(filtered_df[c]) and not ptypes.is_bool_dtype(filtered_df[c])
 ]
 
-chart_type = choose("Chart type", ["Bar", "Line", "Scatter", "Histogram"], "w_chart_type", "Bar")
-prefix = f"w_{chart_type}"  # every chart type remembers its own settings
+chart_type = choose(
+    "Chart type",
+    ["Bar", "Line", "Scatter", "Histogram", "Box Plot", "Correlation Heatmap"],
+    "w_chart_type", "Bar",
+)
+prefix = {
+    "Box Plot": "w_Box_Plot",
+    "Correlation Heatmap": "w_Correlation_Heatmap",
+}.get(chart_type, f"w_{chart_type}")
 
 
 def color_choices(exclude):
     """Columns with few distinct values: good for colouring (and not too many lines)."""
     few = [c for c in all_cols if c not in exclude and filtered_df[c].nunique() <= 20]
+    return [NO_COLOR] + few
+
+
+def categorical_choices(exclude):
+    """Low-cardinality non-numeric columns suitable for Box Plot grouping."""
+    few = [
+        column
+        for column in all_cols
+        if column not in exclude
+        and (
+            ptypes.is_bool_dtype(filtered_df[column])
+            or not ptypes.is_numeric_dtype(filtered_df[column])
+        )
+        and filtered_df[column].nunique() <= 20
+    ]
     return [NO_COLOR] + few
 
 
@@ -290,7 +312,10 @@ if chart_type in ("Bar", "Line"):
     )
 
 elif not num_cols:
-    st.info("This chart needs a numeric column, and the table has none.")
+    if chart_type == "Correlation Heatmap":
+        st.info("Correlation Heatmap requires at least two numeric columns.")
+    else:
+        st.info("This chart needs a numeric column, and the table has none.")
     st.stop()
 
 elif chart_type == "Scatter":
@@ -328,7 +353,7 @@ elif chart_type == "Scatter":
         opacity=0.6, labels=labels, template=TEMPLATE,
     )
 
-else:
+elif chart_type == "Histogram":
     # ----- histogram: how the values of one column are distributed -----
     x = choose(
         "Column (number)", num_cols, f"{prefix}_x", first_in(["Sales"], num_cols),
@@ -355,6 +380,114 @@ else:
     fig = px.histogram(
         chart_data, x=x_key, color=color_key,
         barmode="overlay", opacity=0.75, labels=labels, template=TEMPLATE,
+    )
+
+elif chart_type == "Correlation Heatmap":
+    if len(num_cols) < 2:
+        st.info("Correlation Heatmap requires at least two numeric columns.")
+        st.stop()
+
+    selected_key = f"{prefix}_columns"
+    default_columns = num_cols[:20]
+    if selected_key not in st.session_state:
+        if selected_key in saved:
+            selected_columns = [
+                column for column in saved[selected_key] if column in num_cols
+            ][:20]
+        else:
+            selected_columns = default_columns
+        st.session_state[selected_key] = selected_columns
+    else:
+        current_selection = st.session_state[selected_key]
+        valid_selection = [
+            column for column in current_selection if column in num_cols
+        ][:20]
+        if valid_selection != current_selection:
+            st.session_state[selected_key] = valid_selection
+
+    selected_columns = st.multiselect(
+        "Numeric columns",
+        num_cols,
+        key=selected_key,
+        format_func=format_column,
+        max_selections=20,
+    )
+    saved[selected_key] = selected_columns
+    if len(selected_columns) < 2:
+        st.info("Select at least two numeric columns to calculate correlations.")
+        st.stop()
+
+    chart_df = plotting_copy(filtered_df)
+    selected_keys = [plot_column_by_label[column] for column in selected_columns]
+    correlation = chart_df[selected_keys].corr(method="pearson")
+    display_labels = [format_column(column) for column in selected_columns]
+    correlation.index = display_labels
+    correlation.columns = display_labels
+    st.caption("Pearson correlation using pairwise complete observations.")
+    fig = px.imshow(
+        correlation,
+        color_continuous_scale="RdBu",
+        color_continuous_midpoint=0,
+        zmin=-1,
+        zmax=1,
+        text_auto=".2f",
+        aspect="auto",
+        labels={"x": "Column", "y": "Column", "color": "Pearson r"},
+        template=TEMPLATE,
+    )
+
+else:
+    # ----- box plot: distribution of a numeric column, optionally grouped -----
+    y = choose(
+        "Numeric column",
+        num_cols,
+        f"{prefix}_y",
+        first_in(["Sales"], num_cols),
+        format_func=format_column,
+    )
+    group_by = choose(
+        "Group by (optional)",
+        categorical_choices([y]),
+        f"{prefix}_group",
+        NO_COLOR,
+        format_func=format_optional_column,
+    )
+    color = choose(
+        "Color by (optional)",
+        color_choices([y, group_by]),
+        f"{prefix}_color",
+        NO_COLOR,
+        format_func=format_optional_column,
+    )
+
+    chart_df = plotting_copy(filtered_df)
+    y_key = plot_column_by_label[y]
+    group_key = (
+        None if is_chart_choice(group_by, NO_COLOR) else plot_column_by_label[group_by]
+    )
+    color_key = None if is_chart_choice(color, NO_COLOR) else plot_column_by_label[color]
+    labels = {y_key: format_column(y)}
+    required_fields = [("Y", y_key)]
+    if group_key is not None:
+        labels[group_key] = format_column(group_by)
+        required_fields.append(("Group By", group_key))
+    if color_key is not None:
+        labels[color_key] = format_column(color)
+        required_fields.append(("Color", color_key))
+
+    valid_rows, missing_roles = chart_row_mask(chart_df, required_fields)
+    show_chart_row_feedback(
+        int(valid_rows.sum()), len(filtered_df) - int(valid_rows.sum()), missing_roles
+    )
+    chart_data = chart_df.loc[valid_rows]
+    fig = px.box(
+        chart_data,
+        x=group_key,
+        y=y_key,
+        color=color_key,
+        points="outliers",
+        labels=labels,
+        template=TEMPLATE,
     )
 
 st.plotly_chart(fig)

@@ -514,6 +514,186 @@ def test_box_plot_stops_cleanly_when_shared_filters_leave_no_rows(monkeypatch):
     assert any("No rows match the current filters" in item.value for item in at.info)
 
 
+def test_correlation_heatmap_shows_pearson_positive_negative_and_zero_values(monkeypatch):
+    df = pd.DataFrame(
+        {
+            "X": [1, 2, 3, 4, 5],
+            "Positive": [2, 4, 6, 8, 10],
+            "Negative": [10, 8, 6, 4, 2],
+            "Zero": [1, 2, 1, 2, 1],
+            "Category": ["A", "B", "A", "B", "A"],
+        }
+    )
+    at, figures = _open_charts(df, monkeypatch)
+
+    _set_selectbox(at, "w_chart_type", "Correlation Heatmap")
+
+    selector = at.multiselect(key="w_Correlation_Heatmap_columns")
+    figure = figures[-1]
+    trace = figure.data[0]
+    assert trace.type == "heatmap"
+    assert list(selector.value) == ["X", "Positive", "Negative", "Zero"]
+    assert list(trace.x) == ["X", "Positive", "Negative", "Zero"]
+    assert list(trace.y) == ["X", "Positive", "Negative", "Zero"]
+    np.testing.assert_allclose(
+        np.asarray(trace.z, dtype=float),
+        [
+            [1, 1, -1, 0],
+            [1, 1, -1, 0],
+            [-1, -1, 1, 0],
+            [0, 0, 0, 1],
+        ],
+        atol=1e-12,
+    )
+    assert figure.layout.coloraxis.cmin == -1
+    assert figure.layout.coloraxis.cmax == 1
+    assert trace.texttemplate == "%{z:.2f}"
+
+
+def test_correlation_heatmap_uses_pairwise_complete_observations(monkeypatch):
+    df = pd.DataFrame(
+        {
+            "A": [1.0, 2.0, 3.0, np.nan],
+            "B": [2.0, 4.0, np.nan, 8.0],
+            "C": [1.0, np.nan, 9.0, 16.0],
+        }
+    )
+    at, figures = _open_charts(df, monkeypatch)
+
+    _set_selectbox(at, "w_chart_type", "Correlation Heatmap")
+
+    correlation = np.asarray(figures[-1].data[0].z, dtype=float)
+    np.testing.assert_allclose(correlation, np.ones((3, 3)), atol=1e-12)
+    assert any("pairwise complete observations" in item.value for item in at.caption)
+
+
+def test_correlation_heatmap_keeps_constant_column_correlations_undefined(monkeypatch):
+    df = pd.DataFrame(
+        {
+            "Constant": [5.0, 5.0, 5.0],
+            "Variable": [1.0, 2.0, 3.0],
+        }
+    )
+    at, figures = _open_charts(df, monkeypatch)
+
+    _set_selectbox(at, "w_chart_type", "Correlation Heatmap")
+
+    assert not at.exception
+    correlation = np.asarray(figures[-1].data[0].z, dtype=float)
+    assert np.isnan(correlation[0, 0])
+    assert np.isnan(correlation[0, 1])
+    assert np.isnan(correlation[1, 0])
+    assert correlation[1, 1] == 1.0
+
+
+def test_correlation_heatmap_requires_two_numeric_columns_and_two_selections(monkeypatch):
+    one_numeric = pd.DataFrame({"Amount": [1.0, 2.0], "Category": ["A", "B"]})
+    at, figures = _open_charts(one_numeric, monkeypatch)
+    initial_count = len(figures)
+
+    _set_selectbox(at, "w_chart_type", "Correlation Heatmap")
+    assert len(figures) == initial_count
+    assert any("at least two numeric columns" in item.value for item in at.info)
+
+    multiple_numeric = pd.DataFrame(
+        {"A": [1.0, 2.0], "B": [2.0, 4.0], "C": [4.0, 2.0]}
+    )
+    at, figures = _open_charts(multiple_numeric, monkeypatch)
+    _set_selectbox(at, "w_chart_type", "Correlation Heatmap")
+    initial_count = len(figures)
+    at.multiselect(key="w_Correlation_Heatmap_columns").set_value(["A"]).run()
+    assert not at.exception
+    assert len(figures) == initial_count
+    assert any("Select at least two numeric columns" in item.value for item in at.info)
+
+
+def test_correlation_heatmap_limits_selection_to_twenty_columns(monkeypatch):
+    df = pd.DataFrame(
+        {f"N{column}": [1.0, 2.0, 3.0] for column in range(21)}
+    )
+    at, figures = _open_charts(df, monkeypatch)
+
+    _set_selectbox(at, "w_chart_type", "Correlation Heatmap")
+
+    selector = at.multiselect(key="w_Correlation_Heatmap_columns")
+    assert len(selector.value) == 20
+    assert selector.proto.max_selections == 20
+    assert len(figures[-1].data[0].z) == 20
+
+
+def test_correlation_heatmap_distinguishes_mixed_type_column_labels(monkeypatch):
+    df = pd.DataFrame(
+        [
+            [1.0, 3.0, 1.0],
+            [2.0, 2.0, 2.0],
+            [3.0, 1.0, 3.0],
+        ],
+        columns=[1, "1", "Other"],
+    )
+    at, figures = _open_charts(df, monkeypatch)
+
+    _set_selectbox(at, "w_chart_type", "Correlation Heatmap")
+
+    selector = at.multiselect(key="w_Correlation_Heatmap_columns")
+    assert list(selector.value) == [1, "1", "Other"]
+    assert list(selector.options) == [
+        "1 (int, column 1)",
+        "1 (str, column 2)",
+        "Other",
+    ]
+    assert list(figures[-1].data[0].x) == list(selector.options)
+    correlation = np.asarray(figures[-1].data[0].z, dtype=float)
+    assert correlation[0, 1] == -1.0
+    assert correlation[0, 2] == 1.0
+    assert type(at.session_state["df"].columns[0]) is int
+    assert type(at.session_state["df"].columns[1]) is str
+
+
+def test_correlation_heatmap_settings_restore_after_navigation(monkeypatch):
+    df = pd.DataFrame(
+        {
+            "A": [1.0, 2.0, 3.0],
+            "B": [2.0, 4.0, 6.0],
+            "C": [3.0, 2.0, 1.0],
+        }
+    )
+    at, figures = _open_charts(df, monkeypatch)
+
+    _set_selectbox(at, "w_chart_type", "Correlation Heatmap")
+    at.multiselect(key="w_Correlation_Heatmap_columns").set_value(["A", "C"]).run()
+    assert not at.exception
+    expected = np.asarray(figures[-1].data[0].z, dtype=float).copy()
+
+    at.switch_page("Data_Explorer.py").run()
+    assert not at.exception
+    at.switch_page(CHARTS_PAGE).run()
+    assert not at.exception
+    assert at.selectbox(key="w_chart_type").value == "Correlation Heatmap"
+    assert at.multiselect(key="w_Correlation_Heatmap_columns").value == ["A", "C"]
+    np.testing.assert_allclose(figures[-1].data[0].z, expected)
+
+
+def test_correlation_heatmap_stops_cleanly_when_shared_filters_leave_no_rows(monkeypatch):
+    df = pd.DataFrame(
+        {
+            "Category": ["A", "B"],
+            "First": [1.0, 2.0],
+            "Second": [2.0, 4.0],
+        }
+    )
+    at, figures = _open_charts(df, monkeypatch)
+
+    _set_selectbox(at, "w_chart_type", "Correlation Heatmap")
+    figure_count = len(figures)
+    at.multiselect(key="w_filter_cols").set_value([0]).run()
+    assert not at.exception
+    at.multiselect(key="w_filter_value_0").set_value([]).run()
+    assert not at.exception
+
+    assert len(figures) == figure_count + 1
+    assert any("No rows match the current filters" in item.value for item in at.info)
+
+
 def test_shared_filter_changes_the_actual_chart_aggregation(monkeypatch):
     df = pd.DataFrame(
         {
