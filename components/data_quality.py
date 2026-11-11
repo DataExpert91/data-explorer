@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 import hashlib
 import warnings
 
@@ -234,6 +235,159 @@ def profile_dataframe(
         "column_report": column_report,
     }
     return report, duplicate_mask
+
+
+def _validation_column_label(
+    df: pd.DataFrame, position: int, label_counts: Counter
+) -> str:
+    column = df.columns[position]
+    label = str(column)
+    if not isinstance(column, str) or label_counts[label] > 1:
+        return f"{label} ({type(column).__name__}, column {position + 1})"
+    return label
+
+
+def validate_dataframe(
+    df: pd.DataFrame,
+    treat_blank_strings: bool = False,
+    missing_tokens=(),
+    *,
+    profile_report: dict | None = None,
+) -> dict:
+    """Validate a dataframe using the existing profile calculations, read-only."""
+    if profile_report is None:
+        profile_report, _ = profile_dataframe(
+            df,
+            treat_blank_strings=treat_blank_strings,
+            missing_tokens=missing_tokens,
+        )
+
+    column_types = []
+    missing_columns = []
+    mismatches = []
+    label_counts = Counter(str(column) for column in df.columns)
+    for position, profile in enumerate(profile_report["column_report"]):
+        column = {
+            "Position": position + 1,
+            "Column": _validation_column_label(df, position, label_counts),
+            "Data type": profile["Data type"],
+            "Potential mismatch": profile["Potential mismatch"],
+            "Suggested type": profile["Suggested type"],
+        }
+        column_types.append(column)
+        if profile["Missing"]:
+            missing_columns.append(
+                {
+                    "Position": position + 1,
+                    "Column": column["Column"],
+                    "Missing": profile["Missing"],
+                    "Missing %": profile["Missing %"],
+                }
+            )
+        if profile["Potential mismatch"]:
+            mismatches.append(
+                {
+                    "check": "Potential data type mismatch",
+                    "position": position + 1,
+                    "column": column["Column"],
+                    "message": profile["Potential mismatch"],
+                    "suggested_type": profile["Suggested type"],
+                }
+            )
+
+    issues = []
+    warnings_found = list(mismatches)
+    passed_checks = []
+    rows = profile_report["rows"]
+    columns = profile_report["columns"]
+    total_missing = profile_report["total_missing"]
+    duplicate_rows = profile_report["duplicate_rows"]
+
+    if rows == 0:
+        issues.append(
+            {
+                "check": "Dataset size",
+                "message": "The dataset contains no rows.",
+                "count": 0,
+            }
+        )
+        warnings_found.append(
+            {
+                "check": "Missing value check",
+                "message": (
+                    "Missing values could not be assessed because the dataset "
+                    "has no rows."
+                ),
+            }
+        )
+    elif total_missing:
+        issues.append(
+            {
+                "check": "Missing values",
+                "message": (
+                    f"{total_missing} missing value(s) remain across "
+                    f"{len(missing_columns)} column(s)."
+                ),
+                "count": total_missing,
+            }
+        )
+    else:
+        passed_checks.append("No missing values detected.")
+
+    if columns == 0:
+        issues.append(
+            {
+                "check": "Dataset structure",
+                "message": "The dataset contains no columns.",
+                "count": 0,
+            }
+        )
+    if duplicate_rows is None:
+        issues.append(
+            {
+                "check": "Duplicate rows",
+                "message": profile_report.get(
+                    "duplicate_error", "Duplicate detection could not be completed."
+                ),
+                "count": None,
+            }
+        )
+    elif duplicate_rows:
+        issues.append(
+            {
+                "check": "Duplicate rows",
+                "message": f"{duplicate_rows} duplicate row(s) were detected.",
+                "count": duplicate_rows,
+            }
+        )
+    else:
+        passed_checks.append("No duplicate rows detected.")
+
+    if columns and not mismatches:
+        passed_checks.append("No obvious data type inconsistencies detected.")
+    elif not columns:
+        warnings_found.append(
+            {
+                "check": "Data type check",
+                "message": "Data types could not be assessed because the dataset has no columns.",
+            }
+        )
+
+    return {
+        "status": "Completed",
+        "rows": rows,
+        "columns": columns,
+        "total_missing": total_missing,
+        "actual_missing": profile_report["actual_missing"],
+        "recognized_as_missing": profile_report["recognized_as_missing"],
+        "columns_with_missing": missing_columns,
+        "duplicate_rows": duplicate_rows,
+        "column_types": column_types,
+        "passed_checks": passed_checks,
+        "warnings": warnings_found,
+        "issues": issues,
+        "remaining_issue_count": len(issues) + len(warnings_found),
+    }
 
 
 def _convert_series_with_failure_masks(

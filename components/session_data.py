@@ -52,6 +52,7 @@ def bump_data_version(
         session_state["data_version_df_id"] = id(active_df)
     session_state.pop("dq_analysis", None)
     session_state.pop("dq_preview", None)
+    session_state.pop("dq_validation", None)
     return version
 
 

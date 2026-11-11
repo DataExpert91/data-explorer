@@ -13,7 +13,7 @@ WORKFLOW_STAGES = (
     ("upload", "Upload Data", "Data_Explorer.py"),
     ("profile", "Profile Data", "pages/1_Data_Quality.py"),
     ("clean", "Clean Data", "pages/1_Data_Quality.py"),
-    ("validate", "Validate Data", None),
+    ("validate", "Validate Data", "pages/1_Data_Quality.py"),
     ("explore", "Explore Data", "pages/3_Charts.py"),
     ("export", "Export Results", None),
 )
@@ -69,12 +69,16 @@ def workflow_stage_statuses(state, current_stage=None):
             statuses[stage_id] = COMPLETED
         elif stage_id == "upload" and current_stage == "upload":
             statuses[stage_id] = IN_PROGRESS
-        elif stage_id == "profile" and has_data and current_stage == "profile":
+        elif (
+            stage_id == "profile"
+            and has_data
+            and current_stage in {"profile", "quality"}
+        ):
             statuses[stage_id] = IN_PROGRESS
         elif (
             stage_id == "clean"
             and has_data
-            and current_stage == "profile"
+            and current_stage in {"profile", "quality"}
             and "profile" in completed
         ):
             statuses[stage_id] = IN_PROGRESS
@@ -94,7 +98,7 @@ def workflow_stage_available(state, stage_id):
 
     if stage_id == "upload":
         return True
-    if stage_id in {"profile", "explore"}:
+    if stage_id in {"profile", "explore", "validate"}:
         return has_data
     if stage_id == "clean":
         return has_data and "profile" in workflow["completed"]
@@ -122,8 +126,6 @@ def render_workflow(current_stage=None):
                         label="Open",
                         disabled=not workflow_stage_available(state, stage_id),
                     )
-                elif stage_id == "validate":
-                    st.caption("Validation action not available yet")
                 else:
                     st.caption("Export workflow coming later")
 

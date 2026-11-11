@@ -12,6 +12,7 @@ from components.data_quality import (
     dataframe_signature,
     preview_cleaning,
     profile_dataframe,
+    validate_dataframe,
 )
 from components.session_data import (
     apply_cleaned_dataframe,
@@ -104,7 +105,18 @@ if analysis is not None and analysis.get("signature") != analysis_signature:
 if analysis is not None:
     mark_workflow_stage_complete(st.session_state, "profile")
 
-render_workflow("profile")
+validation_state = st.session_state.get("dq_validation")
+if validation_state is not None and (
+    validation_state.get("data_version") != st.session_state["data_version"]
+    or validation_state.get("missing_policy_signature") != missing_policy_signature
+):
+    st.session_state.pop("dq_validation", None)
+    clear_workflow_stage(st.session_state, "validate")
+    validation_state = None
+elif validation_state is not None:
+    mark_workflow_stage_complete(st.session_state, "validate")
+
+render_workflow("quality")
 
 column_label_counts = Counter(str(column) for column in current_df.columns)
 conversion_column_labels = {}
@@ -535,3 +547,81 @@ if st.button("Undo last cleaning", key="dq_undo_cleaning", disabled=not undo_ava
     undo_cleaned_dataframe(st.session_state)
     reset_downstream_widgets()
     st.rerun()
+
+st.subheader("Validate data")
+st.caption(
+    "Validation checks the current dataset without changing it. Findings do not "
+    "prevent validation from being completed."
+)
+if st.button("Run data validation", key="dq_run_validation"):
+    try:
+        current_analysis = st.session_state.get("dq_analysis")
+        if (
+            current_analysis is not None
+            and current_analysis.get("signature") == analysis_signature
+        ):
+            profile_report = current_analysis["report"]
+        else:
+            profile_report, _ = profile_dataframe(
+                current_df,
+                treat_blank_strings=treat_blank_strings,
+                missing_tokens=missing_tokens,
+            )
+        result = validate_dataframe(
+            current_df,
+            treat_blank_strings=treat_blank_strings,
+            missing_tokens=missing_tokens,
+            profile_report=profile_report,
+        )
+        st.session_state["dq_validation"] = {
+            "data_version": st.session_state["data_version"],
+            "missing_policy_signature": missing_policy_signature,
+            "result": result,
+        }
+        mark_workflow_stage_complete(st.session_state, "validate")
+        st.rerun()
+    except Exception as exc:
+        st.error(f"Could not complete data validation: {exc}")
+
+validation_state = st.session_state.get("dq_validation")
+if validation_state is not None:
+    result = validation_state["result"]
+    st.success(
+        "Validation completed: "
+        f"{len(result['issues'])} issue(s), "
+        f"{len(result['warnings'])} warning(s), "
+        f"{len(result['passed_checks'])} passed check(s)."
+    )
+    metrics = st.columns(5)
+    metrics[0].metric("Rows", f"{result['rows']:,}")
+    metrics[1].metric("Columns", f"{result['columns']:,}")
+    metrics[2].metric("Missing values", f"{result['total_missing']:,}")
+    metrics[3].metric(
+        "Duplicate rows",
+        "Unavailable"
+        if result["duplicate_rows"] is None
+        else f"{result['duplicate_rows']:,}",
+    )
+    metrics[4].metric("Items needing attention", f"{result['remaining_issue_count']:,}")
+
+    with st.expander("Validation details", expanded=False):
+        st.markdown("**Passed checks**")
+        if result["passed_checks"]:
+            st.markdown("\n".join(f"- {check}" for check in result["passed_checks"]))
+        else:
+            st.caption("No checks passed without findings.")
+
+        if result["issues"]:
+            st.markdown("**Issues requiring attention**")
+            st.dataframe(pd.DataFrame(result["issues"]), use_container_width=True)
+        if result["warnings"]:
+            st.markdown("**Warnings**")
+            st.dataframe(pd.DataFrame(result["warnings"]), use_container_width=True)
+        if result["columns_with_missing"]:
+            st.markdown("**Columns containing missing values**")
+            st.dataframe(
+                pd.DataFrame(result["columns_with_missing"]),
+                use_container_width=True,
+            )
+        st.markdown("**Column data types**")
+        st.dataframe(pd.DataFrame(result["column_types"]), use_container_width=True)

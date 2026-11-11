@@ -33,7 +33,7 @@ def test_workflow_statuses_track_successful_actions_and_data_version():
     assert statuses["export"] == NOT_STARTED
     assert workflow_stage_available(state, "profile")
     assert not workflow_stage_available(state, "clean")
-    assert not workflow_stage_available(state, "validate")
+    assert workflow_stage_available(state, "validate")
     assert not workflow_stage_available(state, "export")
 
     mark_workflow_stage_complete(state, "profile")
