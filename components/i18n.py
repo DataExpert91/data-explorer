@@ -29,6 +29,7 @@ EN = {
     # Data Explorer
     "explorer.title": "Data Explorer",
     "explorer.upload": "Upload a CSV or Excel file",
+    "explorer.empty_state": "Upload a CSV or Excel file to get started.",
     "explorer.current_data": "Current data: {source}",
     "explorer.edited_caption": "Showing the table with your edits from the Editor page.",
     "explorer.row_count": "Showing {shown:,} of {total:,} rows",
@@ -335,6 +336,7 @@ RU = {
     # Data Explorer
     "explorer.title": "Обозреватель данных",
     "explorer.upload": "Загрузить файл CSV или Excel",
+    "explorer.empty_state": "Загрузить файл CSV или Excel",
     "explorer.current_data": "Текущие данные: {source}",
     "explorer.edited_caption": "Показана таблица с изменениями из редактора.",
     "explorer.row_count": "Показано строк: {shown:,} из {total:,}",

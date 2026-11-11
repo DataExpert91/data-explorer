@@ -1,9 +1,52 @@
+# Python environments
 env/
 .venv/
+venv/
+
+# Python bytecode and test/tool caches
 __pycache__/
+**/__pycache__/
 .pytest_cache/
 *.py[cod]
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# Local credentials and environment configuration
 .env
 .env.*
+!.env.example
 .streamlit/secrets.toml
+.streamlit/credentials.toml
+
+# Local IDE settings
+.vscode/
+.idea/
+*.code-workspace
+
+# Operating system files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Temporary files, logs, and local exports
+*.log
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+*~
+/exports/
+/local_exports/
+
+# Local Superstore data (available in earlier Git history only)
+/data/raw/Sample_Superstore.csv
+/data/clean/superstore_clean.csv
+
+# Notebook checkpoints
 .ipynb_checkpoints/

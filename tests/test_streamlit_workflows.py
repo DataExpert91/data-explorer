@@ -12,6 +12,22 @@ from components.data_quality import (
 
 
 APP_PATH = Path(__file__).resolve().parents[1] / "Data_Explorer.py"
+
+
+def test_explorer_starts_in_upload_first_state_without_bundled_data():
+    at = AppTest.from_file(str(APP_PATH))
+
+    at.run()
+
+    _assert_no_streamlit_exception(at)
+    assert "df" not in at.session_state
+    assert "source" not in at.session_state
+    assert len(at.file_uploader) == 1
+    assert any(
+        item.value == "Upload a CSV or Excel file to get started."
+        for item in at.info
+    )
+    assert at.session_state["guided_workflow"]["completed"] == []
 QUALITY_PAGE = "pages/1_Data_Quality.py"
 
 

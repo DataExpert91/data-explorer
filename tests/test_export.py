@@ -231,9 +231,7 @@ def test_export_page_has_no_download_actions_without_a_dataset():
     at = AppTest.from_file(str(APP_PATH))
     at.run()
     assert not at.exception
-    del at.session_state["df"]
-    if "edited_df" in at.session_state:
-        del at.session_state["edited_df"]
+    assert "df" not in at.session_state
     at.switch_page(EXPORT_PAGE)
     at.run()
 

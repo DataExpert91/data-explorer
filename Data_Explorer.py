@@ -1,7 +1,6 @@
-# Superstore Dashboard: Data Explorer (main page).
+# Data Explorer (main page).
 #
-# Loads the data (the clean demo file or a user upload) and stores it in
-# session_state so the other pages can use it.
+# Loads a user upload and stores it in session_state so the other pages can use it.
 # The table can be filtered in the sidebar (filters live in components/filters.py).
 
 import pandas as pd
@@ -15,8 +14,6 @@ from components.session_data import (
     replace_source_dataframe,
 )
 from components.workflow import render_workflow
-
-DEMO_PATH = "data/clean/superstore_clean.csv"
 
 st.title(t("explorer.title"))
 render_language_selector()
@@ -56,19 +53,10 @@ if uploaded_file is not None:
             if key.startswith("w_"):  # all filter widgets
                 del st.session_state[key]
 
-elif "df" not in st.session_state:
-    # first visit and no upload: load the demo file once
-    demo_df = pd.read_csv(
-        DEMO_PATH,
-        parse_dates=["Order Date", "Ship Date"],
-        dtype={"Postal Code": str},
-    )
-    replace_source_dataframe(
-        st.session_state,
-        demo_df,
-        source="demo data (superstore_clean.csv)",
-    )
-    bump_data_version(st.session_state, st.session_state["df"])
+if st.session_state.get("df") is None:
+    render_workflow("upload")
+    st.info(t("explorer.empty_state"))
+    st.stop()
 
 # the table we work with: the edited version if it exists, otherwise the original
 current_df = get_active_dataframe(st.session_state)
