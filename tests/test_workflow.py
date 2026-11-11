@@ -34,7 +34,9 @@ def test_workflow_statuses_track_successful_actions_and_data_version():
     assert workflow_stage_available(state, "profile")
     assert not workflow_stage_available(state, "clean")
     assert workflow_stage_available(state, "validate")
-    assert not workflow_stage_available(state, "export")
+    assert workflow_stage_available(state, "export")
+    assert statuses["export"] == NOT_STARTED
+    assert workflow_stage_statuses(state, current_stage="export")["export"] == IN_PROGRESS
 
     mark_workflow_stage_complete(state, "profile")
     statuses = workflow_stage_statuses(state, current_stage="profile")
@@ -53,7 +55,7 @@ def test_workflow_statuses_track_successful_actions_and_data_version():
     assert statuses["clean"] == NOT_STARTED
 
 
-def test_workflow_keeps_six_stages_and_never_completes_unimplemented_actions():
+def test_workflow_keeps_six_stages_and_export_starts_incomplete():
     assert [stage[0] for stage in WORKFLOW_STAGES] == [
         "upload",
         "profile",
@@ -66,6 +68,8 @@ def test_workflow_keeps_six_stages_and_never_completes_unimplemented_actions():
     statuses = workflow_stage_statuses(state)
     assert statuses["validate"] == NOT_STARTED
     assert statuses["export"] == NOT_STARTED
+    assert workflow_stage_available(state, "export")
+    assert not workflow_stage_available({}, "export")
 
 
 def test_workflow_state_and_active_data_survive_page_navigation():

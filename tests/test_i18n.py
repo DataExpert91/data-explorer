@@ -12,6 +12,7 @@ APP_PATH = Path(__file__).resolve().parents[1] / "Data_Explorer.py"
 CHARTS_PAGE = "pages/3_Charts.py"
 QUALITY_PAGE = "pages/1_Data_Quality.py"
 EDITOR_PAGE = "pages/2_Editor.py"
+EXPORT_PAGE = "pages/4_Export.py"
 
 
 def test_new_session_defaults_to_english():
@@ -118,6 +119,7 @@ def test_russian_language_is_used_on_quality_and_editor_pages():
     for page, title_key in (
         (QUALITY_PAGE, "dq.title"),
         (EDITOR_PAGE, "editor.title"),
+        (EXPORT_PAGE, "export.title"),
     ):
         at = AppTest.from_file(str(APP_PATH))
         at.session_state["df"] = pd.DataFrame({"Value": [1, 2]})

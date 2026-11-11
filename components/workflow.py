@@ -17,7 +17,7 @@ WORKFLOW_STAGES = (
     ("clean", "Clean Data", "pages/1_Data_Quality.py"),
     ("validate", "Validate Data", "pages/1_Data_Quality.py"),
     ("explore", "Explore Data", "pages/3_Charts.py"),
-    ("export", "Export Results", None),
+    ("export", "Export Results", "pages/4_Export.py"),
 )
 _STAGE_IDS = {stage_id for stage_id, _, _ in WORKFLOW_STAGES}
 
@@ -86,6 +86,8 @@ def workflow_stage_statuses(state, current_stage=None):
             statuses[stage_id] = IN_PROGRESS
         elif stage_id == "explore" and has_data and current_stage == "explore":
             statuses[stage_id] = IN_PROGRESS
+        elif stage_id == "export" and has_data and current_stage == "export":
+            statuses[stage_id] = IN_PROGRESS
         else:
             statuses[stage_id] = NOT_STARTED
     return statuses
@@ -104,7 +106,9 @@ def workflow_stage_available(state, stage_id):
         return has_data
     if stage_id == "clean":
         return has_data and "profile" in workflow["completed"]
-    # These actions have no workflow implementation yet.
+    if stage_id == "export":
+        return has_data and "upload" in workflow["completed"]
+    # This action has no workflow implementation yet.
     return False
 
 
