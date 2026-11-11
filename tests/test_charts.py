@@ -116,11 +116,44 @@ def test_bar_color_grouping_produces_separate_aggregated_series(monkeypatch):
     _set_selectbox(at, "w_Bar_color", "Region")
 
     figure = figures[-1]
+    assert at.selectbox(key="w_Bar_mode").value == "Grouped"
     assert figure.layout.barmode == "group"
     assert _trace_values(figure) == {
         "East": (["A", "B"], [2, 5]),
         "West": (["A", "B"], [3, 7]),
     }
+
+    _set_selectbox(at, "w_Bar_mode", "Stacked")
+    assert figures[-1].layout.barmode == "stack"
+    assert _trace_values(figures[-1]) == {
+        "East": (["A", "B"], [2, 5]),
+        "West": (["A", "B"], [3, 7]),
+    }
+
+
+def test_grouped_and_stacked_count_keep_color_segments_and_missing_row_feedback(monkeypatch):
+    df = pd.DataFrame(
+        {
+            "Category": ["A", "A", "A", "A", "B", "B", None],
+            "Region": ["East", "East", "West", None, "East", "West", "East"],
+        }
+    )
+    at, figures = _open_charts(df, monkeypatch)
+
+    _set_selectbox(at, "w_Bar_color", "Region")
+    grouped_figure = figures[-1]
+    grouped_data = _trace_values(grouped_figure)
+    assert grouped_figure.layout.barmode == "group"
+    assert grouped_data == {
+        "East": (["A", "B"], [2, 1]),
+        "West": (["A", "B"], [1, 1]),
+    }
+    assert any("2 rows excluded" in item.value for item in at.caption)
+
+    _set_selectbox(at, "w_Bar_mode", "Stacked")
+    stacked_figure = figures[-1]
+    assert stacked_figure.layout.barmode == "stack"
+    assert _trace_values(stacked_figure) == grouped_data
 
 
 def test_reserved_labels_coexist_with_sentinel_choices_and_select_real_columns(monkeypatch):
@@ -167,6 +200,92 @@ def test_bar_top_n_keeps_and_orders_the_largest_categories(monkeypatch):
     assert set(figure.data[0].x) == {"B", "C", "D", "E", "F"}
     assert list(figure.layout.xaxis.categoryarray) == ["B", "C", "D", "E", "F"]
     assert list(figure.data[0].y) == [6, 5, 4, 3, 2]
+
+
+def test_stacked_bar_top_n_keeps_orders_and_stacks_largest_categories(monkeypatch):
+    counts = {"A": 1, "B": 2, "C": 3, "D": 4, "E": 5, "F": 6}
+    rows = [
+        (category, "East" if index % 2 == 0 else "West", 1)
+        for category, count in counts.items()
+        for index in range(count)
+    ]
+    df = pd.DataFrame(rows, columns=["Category", "Region", "Amount"])
+    at, figures = _open_charts(df, monkeypatch)
+
+    _set_selectbox(at, "w_Bar_y", "Amount")
+    _set_selectbox(at, "w_Bar_color", "Region")
+    _set_selectbox(at, "w_Bar_mode", "Stacked")
+    _set_selectbox(at, "w_Bar_topn", 5)
+
+    figure = figures[-1]
+    assert figure.layout.barmode == "stack"
+    assert list(figure.layout.xaxis.categoryarray) == ["F", "E", "D", "C", "B"]
+    assert {trace.name: dict(zip(trace.x, trace.y)) for trace in figure.data} == {
+        "East": {"B": 1, "C": 2, "D": 2, "E": 3, "F": 3},
+        "West": {"B": 1, "C": 1, "D": 2, "E": 2, "F": 3},
+    }
+
+
+def test_stacked_average_and_median_show_subgroup_statistics_note(monkeypatch):
+    df = pd.DataFrame(
+        {
+            "Category": ["A", "A", "A", "A", "B", "B"],
+            "Region": ["East", "East", "East", "West", "East", "West"],
+            "Amount": [2, 4, 30, 10, 6, 30],
+        }
+    )
+    at, figures = _open_charts(df, monkeypatch)
+
+    _set_selectbox(at, "w_Bar_y", "Amount")
+    _set_selectbox(at, "w_Bar_color", "Region")
+    _set_selectbox(at, "w_Bar_mode", "Stacked")
+    note = (
+        "The stacked height represents the sum of subgroup "
+        "averages/medians, not the overall category average/median."
+    )
+
+    _set_selectbox(at, "w_Bar_agg", "Average")
+    assert figures[-1].layout.barmode == "stack"
+    assert _trace_values(figures[-1]) == {
+        "East": (["A", "B"], [12.0, 6.0]),
+        "West": (["A", "B"], [10.0, 30.0]),
+    }
+    assert any(note in item.value for item in at.info)
+
+    _set_selectbox(at, "w_Bar_agg", "Median")
+    assert figures[-1].layout.barmode == "stack"
+    assert _trace_values(figures[-1]) == {
+        "East": (["A", "B"], [4.0, 6.0]),
+        "West": (["A", "B"], [10.0, 30.0]),
+    }
+    assert any(note in item.value for item in at.info)
+
+    _set_selectbox(at, "w_Bar_mode", "Grouped")
+    assert figures[-1].layout.barmode == "group"
+    assert not any(note in item.value for item in at.info)
+
+
+def test_stacked_bar_mode_restores_after_navigation(monkeypatch):
+    df = pd.DataFrame(
+        {
+            "Category": ["A", "A", "B", "B"],
+            "Region": ["East", "West", "East", "West"],
+            "Amount": [2, 3, 5, 7],
+        }
+    )
+    at, figures = _open_charts(df, monkeypatch)
+
+    assert at.selectbox(key="w_Bar_mode").value == "Grouped"
+    _set_selectbox(at, "w_Bar_mode", "Stacked")
+    assert figures[-1].layout.barmode == "stack"
+
+    at.switch_page("Data_Explorer.py").run()
+    assert not at.exception
+    assert "w_Bar_mode" not in at.session_state
+    at.switch_page(CHARTS_PAGE).run()
+    assert not at.exception
+    assert at.selectbox(key="w_Bar_mode").value == "Stacked"
+    assert figures[-1].layout.barmode == "stack"
 
 
 def test_line_chart_groups_timezone_aware_dates_and_colors_by_day(monkeypatch):

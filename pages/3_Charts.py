@@ -203,6 +203,19 @@ if chart_type in ("Bar", "Line"):
         NO_COLOR,
         format_func=format_optional_column,
     )
+    bar_mode = None
+    if chart_type == "Bar":
+        bar_mode = choose(
+            "Bar display mode",
+            ["Grouped", "Stacked"],
+            f"{prefix}_mode",
+            "Grouped",
+        )
+        if bar_mode == "Stacked" and func_name in {"Average", "Median"}:
+            st.info(
+                "The stacked height represents the sum of subgroup "
+                "averages/medians, not the overall category average/median."
+            )
     color_arg = None if is_chart_choice(color, NO_COLOR) else color
     x_key = plot_column_by_label[x]
     y_key = COUNT_ROWS_COLUMN if is_chart_choice(y, COUNT_ROWS) else plot_column_by_label[y]
@@ -255,7 +268,8 @@ if chart_type in ("Bar", "Line"):
             labels[color_key] = format_column(color_arg)
         fig = px.bar(
             agg, x=x_key, y=y_key, color=color_key,
-            barmode="group", category_orders=order,
+            barmode={"Grouped": "group", "Stacked": "stack"}[bar_mode],
+            category_orders=order,
             labels=labels, template=TEMPLATE,
         )
     else:
