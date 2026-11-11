@@ -13,6 +13,7 @@ from components.session_data import (
     get_active_dataframe,
     replace_source_dataframe,
 )
+from components.workflow import render_workflow
 
 DEMO_PATH = "data/clean/superstore_clean.csv"
 
@@ -67,6 +68,7 @@ elif "df" not in st.session_state:
 
 # the table we work with: the edited version if it exists, otherwise the original
 current_df = get_active_dataframe(st.session_state)
+render_workflow("upload")
 
 st.caption(f"Current data: {st.session_state['source']}")
 if "edited_df" in st.session_state:

@@ -19,6 +19,11 @@ from components.session_data import (
     get_active_dataframe,
     undo_cleaned_dataframe,
 )
+from components.workflow import (
+    clear_workflow_stage,
+    mark_workflow_stage_complete,
+    render_workflow,
+)
 
 DQ_PREVIEW_FORMAT_VERSION = 3
 
@@ -93,7 +98,13 @@ analysis_signature = (current_signature, missing_policy_signature)
 analysis = st.session_state.get("dq_analysis")
 if analysis is not None and analysis.get("signature") != analysis_signature:
     invalidate_quality_results()
+    clear_workflow_stage(st.session_state, "profile")
     analysis = None
+
+if analysis is not None:
+    mark_workflow_stage_complete(st.session_state, "profile")
+
+render_workflow("profile")
 
 column_label_counts = Counter(str(column) for column in current_df.columns)
 conversion_column_labels = {}
@@ -117,6 +128,7 @@ if st.button("Run data quality analysis", key="dq_run_analysis"):
                 "report": report,
                 "duplicate_mask": duplicate_mask,
             }
+            mark_workflow_stage_complete(st.session_state, "profile")
             st.session_state.pop("dq_preview", None)
             st.rerun()
         except Exception as exc:
@@ -507,6 +519,7 @@ if st.button(
             ],
         )
         apply_cleaned_dataframe(st.session_state, cleaned_df)
+        mark_workflow_stage_complete(st.session_state, "clean")
         reset_downstream_widgets()
         st.rerun()
     except Exception as exc:

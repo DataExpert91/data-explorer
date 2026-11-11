@@ -13,6 +13,7 @@ from pandas.api import types as ptypes
 
 from components.filters import sidebar_filters
 from components.session_data import get_active_dataframe
+from components.workflow import mark_workflow_stage_complete, render_workflow
 
 class _ChartChoice(Enum):
     COUNT_ROWS = "count_rows"
@@ -36,6 +37,7 @@ if "df" not in st.session_state:
 
 # the same table and the same filters as on the Data Explorer page
 current_df = get_active_dataframe(st.session_state)
+render_workflow("explore")
 filtered_df = sidebar_filters(current_df)
 if not current_df.columns.is_unique:
     st.stop()
@@ -491,3 +493,4 @@ else:
     )
 
 st.plotly_chart(fig)
+mark_workflow_stage_complete(st.session_state, "explore")

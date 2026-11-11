@@ -6,6 +6,7 @@ from components.data_quality import (
     ensure_data_version as legacy_ensure_data_version,
 )
 from components.session_data import (
+    adopt_equivalent_dataframe_reference,
     apply_cleaned_dataframe,
     bump_data_version,
     ensure_data_version,
@@ -153,6 +154,23 @@ def test_ensure_data_version_does_not_increment_for_the_same_dataframe():
     assert version == 4
     assert state["dq_analysis"] is analysis
     assert state["dq_preview"] is preview
+
+
+def test_adopt_equivalent_dataframe_reference_does_not_bump_the_version():
+    previous_df = pd.DataFrame({"value": [1, 2]})
+    equivalent_copy = previous_df.copy(deep=True)
+    analysis = {"report": "current"}
+    state = {
+        "data_version": 4,
+        "data_version_df_id": id(previous_df),
+        "dq_analysis": analysis,
+    }
+
+    adopt_equivalent_dataframe_reference(state, equivalent_copy)
+
+    assert state["data_version"] == 4
+    assert state["data_version_df_id"] == id(equivalent_copy)
+    assert state["dq_analysis"] is analysis
 
 
 def test_ensure_data_version_increments_and_invalidates_after_replacement():

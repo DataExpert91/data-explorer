@@ -22,6 +22,11 @@ def set_active_dataframe(state, dataframe):
     state["edited_df"] = dataframe
 
 
+def adopt_equivalent_dataframe_reference(session_state, dataframe):
+    """Track a known equivalent copy without treating it as a data change."""
+    session_state["data_version_df_id"] = id(dataframe)
+
+
 def replace_source_dataframe(state, dataframe, source, file_key=None):
     """Replace the source dataframe and clear the previous active override."""
     state["df"] = dataframe

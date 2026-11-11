@@ -7,9 +7,17 @@
 from collections import Counter
 import io
 
+import pandas as pd
 import streamlit as st
 
-from components.session_data import get_active_dataframe, set_active_dataframe
+from components.session_data import (
+    adopt_equivalent_dataframe_reference,
+    bump_data_version,
+    ensure_data_version,
+    get_active_dataframe,
+    set_active_dataframe,
+)
+from components.workflow import render_workflow, sync_workflow_state
 
 st.title("Editor")
 
@@ -19,10 +27,14 @@ if "df" not in st.session_state:
 
 # the working copy of the table
 if "edited_df" not in st.session_state:
+    source_df = get_active_dataframe(st.session_state)
+    ensure_data_version(st.session_state, source_df)
+    editor_df = source_df.copy()
     set_active_dataframe(
         st.session_state,
-        get_active_dataframe(st.session_state).copy(),
+        editor_df,
     )
+    adopt_equivalent_dataframe_reference(st.session_state, editor_df)
 
 # While the user stays on this page, the editor must always receive the SAME
 # base table. When the user arrives (the editor has no state yet), we restart
@@ -36,9 +48,12 @@ def commit(new_df):
     set_active_dataframe(st.session_state, new_df)
     st.session_state["editor_base"] = new_df.copy()
     st.session_state.pop("editor", None)
+    st.session_state.pop("editor_applied_delta", None)
+    bump_data_version(st.session_state, new_df)
 
 
 current = get_active_dataframe(st.session_state)
+render_workflow("editor")
 column_positions = list(range(len(current.columns)))
 column_label_counts = Counter(str(column) for column in current.columns)
 
@@ -53,6 +68,73 @@ def _format_column_position(position):
     if column_label_counts[label] > 1 or not isinstance(column, str):
         return f"{label} ({type(column).__name__}, column {position + 1})"
     return label
+
+
+def _editor_delta(widget_state):
+    """Return a stable token for pending editor changes, or None when unchanged."""
+    if not isinstance(widget_state, dict):
+        return None
+    edited_rows = widget_state.get("edited_rows", {})
+    added_rows = widget_state.get("added_rows", [])
+    deleted_rows = widget_state.get("deleted_rows", [])
+    if not edited_rows and not added_rows and not deleted_rows:
+        return None
+    return repr((edited_rows, added_rows, deleted_rows))
+
+
+def _same_cell_value(left, right):
+    """Compare scalar cell values, treating two missing values as equal."""
+    try:
+        left_missing = bool(pd.isna(left))
+    except (TypeError, ValueError):
+        left_missing = False
+    try:
+        right_missing = bool(pd.isna(right))
+    except (TypeError, ValueError):
+        right_missing = False
+    if left_missing or right_missing:
+        return left_missing and right_missing
+    try:
+        return bool(left == right)
+    except (TypeError, ValueError):
+        return False
+
+
+def _editor_result_changed(previous_df, edited_df, widget_state, display_columns):
+    """Check only changed editor cells plus shape and dtype metadata."""
+    if previous_df.shape != edited_df.shape:
+        return True
+    if not previous_df.columns.equals(edited_df.columns):
+        return True
+    if not previous_df.dtypes.equals(edited_df.dtypes):
+        return True
+
+    if widget_state.get("added_rows") or widget_state.get("deleted_rows"):
+        # A paired add/delete can preserve shape. Check the final frame in this
+        # rare explicit row-operation case, including row order and index.
+        return not previous_df.equals(edited_df)
+
+    edited_rows = widget_state.get("edited_rows", {})
+    for row_label, row_changes in edited_rows.items():
+        if not isinstance(row_changes, dict):
+            return True
+        try:
+            row_position = int(row_label)
+        except (TypeError, ValueError):
+            return True
+        if not 0 <= row_position < len(edited_df):
+            return True
+        for column_label in row_changes:
+            try:
+                column_position = display_columns.index(column_label)
+            except ValueError:
+                return True
+            if not _same_cell_value(
+                previous_df.iloc[row_position, column_position],
+                edited_df.iloc[row_position, column_position],
+            ):
+                return True
+    return False
 
 
 current_schema = _column_schema(current)
@@ -207,8 +289,43 @@ edited_display_df = st.data_editor(
 edited_df = edited_display_df.copy(deep=False)
 edited_df.columns = original_columns
 
-# save the edits so they survive leaving the page
-set_active_dataframe(st.session_state, edited_df)
+previous_active_df = get_active_dataframe(st.session_state)
+widget_state = st.session_state.get("editor")
+delta_signature = _editor_delta(widget_state)
+if delta_signature is None:
+    st.session_state.pop("editor_applied_delta", None)
+    edited_df = previous_active_df
+else:
+    applied_delta = st.session_state.get("editor_applied_delta")
+    current_version = st.session_state.get("data_version", 0)
+    if applied_delta == {
+        "version": current_version,
+        "signature": delta_signature,
+    }:
+        # Streamlit reruns with the same widget delta; keep the active reference
+        # and do not count the already-published edit again.
+        edited_df = previous_active_df
+    else:
+        if _editor_result_changed(
+            previous_active_df,
+            edited_df,
+            widget_state,
+            display_columns,
+        ):
+            set_active_dataframe(st.session_state, edited_df)
+            current_version = bump_data_version(st.session_state, edited_df)
+            sync_workflow_state(st.session_state)
+            st.session_state["editor_applied_delta"] = {
+                "version": current_version,
+                "signature": delta_signature,
+            }
+            st.rerun()
+        else:
+            edited_df = previous_active_df
+            st.session_state["editor_applied_delta"] = {
+                "version": current_version,
+                "signature": delta_signature,
+            }
 
 st.caption(f"{edited_df.shape[0]} rows, {edited_df.shape[1]} columns")
 
