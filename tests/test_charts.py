@@ -369,6 +369,151 @@ def test_histogram_uses_selected_numeric_column_and_color_groups(monkeypatch):
     }
 
 
+def test_box_plot_without_grouping_shows_numeric_distribution_and_outliers(monkeypatch):
+    df = pd.DataFrame(
+        {
+            "Amount": [1.0, 2.0, 3.0, 100.0],
+            "Region": ["East", "West", "East", "West"],
+        }
+    )
+    at, figures = _open_charts(df, monkeypatch)
+
+    _set_selectbox(at, "w_chart_type", "Box Plot")
+
+    figure = figures[-1]
+    assert len(figure.data) == 1
+    assert figure.data[0].type == "box"
+    assert list(figure.data[0].y) == [1.0, 2.0, 3.0, 100.0]
+    assert figure.data[0].x is None
+    assert figure.data[0].boxpoints == "outliers"
+
+    _set_selectbox(at, "w_Box_Plot_color", "Region")
+    color_figure = figures[-1]
+    assert {trace.name: list(trace.y) for trace in color_figure.data} == {
+        "East": [1.0, 3.0],
+        "West": [2.0, 100.0],
+    }
+    assert all(trace.x is None and trace.boxpoints == "outliers" for trace in color_figure.data)
+
+
+def test_box_plot_groups_categories_and_colors_actual_trace_data(monkeypatch):
+    df = pd.DataFrame(
+        {
+            "Category": ["A", "A", "A", "B", "B", "B"],
+            "Region": ["East", "East", "West", "East", "West", "West"],
+            "Amount": [1, 2, 10, 3, 20, 30],
+        }
+    )
+    at, figures = _open_charts(df, monkeypatch)
+
+    _set_selectbox(at, "w_chart_type", "Box Plot")
+    _set_selectbox(at, "w_Box_Plot_group", "Category")
+    grouped_figure = figures[-1]
+    assert len(grouped_figure.data) == 1
+    assert list(grouped_figure.data[0].x) == ["A", "A", "A", "B", "B", "B"]
+    assert list(grouped_figure.data[0].y) == [1, 2, 10, 3, 20, 30]
+
+    _set_selectbox(at, "w_Box_Plot_color", "Region")
+
+    figure = figures[-1]
+    assert all(trace.type == "box" for trace in figure.data)
+    assert {trace.name: (list(trace.x), list(trace.y)) for trace in figure.data} == {
+        "East": (["A", "A", "B"], [1, 2, 3]),
+        "West": (["A", "B", "B"], [10, 20, 30]),
+    }
+    assert all(trace.boxpoints == "outliers" for trace in figure.data)
+
+
+def test_box_plot_excludes_missing_numeric_group_and_color_values(monkeypatch):
+    df = pd.DataFrame(
+        {
+            "Category": ["A", "A", None, "B"],
+            "Region": ["East", "West", "East", None],
+            "Amount": [1.0, None, 2.0, 3.0],
+        }
+    )
+    at, figures = _open_charts(df, monkeypatch)
+
+    _set_selectbox(at, "w_chart_type", "Box Plot")
+    _set_selectbox(at, "w_Box_Plot_group", "Category")
+    _set_selectbox(at, "w_Box_Plot_color", "Region")
+
+    figure = figures[-1]
+    assert len(figure.data) == 1
+    assert figure.data[0].name == "East"
+    assert list(figure.data[0].x) == ["A"]
+    assert list(figure.data[0].y) == [1.0]
+    assert any("3 rows excluded" in item.value for item in at.caption)
+    assert any("(Y, Group By, Color)" in item.value for item in at.caption)
+
+
+def test_box_plot_distinguishes_integer_and_string_column_labels(monkeypatch):
+    df = pd.DataFrame(
+        [
+            [1.0, "A", "East"],
+            [2.0, "A", "West"],
+            [3.0, "B", "East"],
+        ],
+        columns=[1, "1", "Region"],
+    )
+    at, figures = _open_charts(df, monkeypatch)
+
+    _set_selectbox(at, "w_chart_type", "Box Plot")
+    _set_selectbox(at, "w_Box_Plot_group", "1")
+    _set_selectbox(at, "w_Box_Plot_color", "Region")
+
+    figure = figures[-1]
+    assert {trace.name: (list(trace.x), list(trace.y)) for trace in figure.data} == {
+        "East": (["A", "B"], [1.0, 3.0]),
+        "West": (["A"], [2.0]),
+    }
+    assert at.session_state["df"].columns.tolist() == [1, "1", "Region"]
+    assert type(at.session_state["df"].columns[0]) is int
+    assert type(at.session_state["df"].columns[1]) is str
+
+
+def test_box_plot_settings_restore_after_navigation(monkeypatch):
+    df = pd.DataFrame(
+        {
+            "Category": ["A", "A", "B", "B"],
+            "Region": ["East", "West", "East", "West"],
+            "Amount": [1, 2, 3, 4],
+        }
+    )
+    at, figures = _open_charts(df, monkeypatch)
+
+    _set_selectbox(at, "w_chart_type", "Box Plot")
+    _set_selectbox(at, "w_Box_Plot_group", "Category")
+    _set_selectbox(at, "w_Box_Plot_color", "Region")
+    expected = {
+        trace.name: (list(trace.x), list(trace.y)) for trace in figures[-1].data
+    }
+
+    at.switch_page("Data_Explorer.py").run()
+    assert not at.exception
+    at.switch_page(CHARTS_PAGE).run()
+    assert not at.exception
+    assert at.selectbox(key="w_chart_type").value == "Box Plot"
+    assert at.selectbox(key="w_Box_Plot_group").value == "Category"
+    assert at.selectbox(key="w_Box_Plot_color").value == "Region"
+    assert {trace.name: (list(trace.x), list(trace.y)) for trace in figures[-1].data} == expected
+
+
+def test_box_plot_stops_cleanly_when_shared_filters_leave_no_rows(monkeypatch):
+    df = pd.DataFrame({"Category": ["A", "B"], "Amount": [1, 2]})
+    at, figures = _open_charts(df, monkeypatch)
+
+    _set_selectbox(at, "w_chart_type", "Box Plot")
+    figure_count = len(figures)
+    at.multiselect(key="w_filter_cols").set_value([0]).run()
+    assert not at.exception
+    at.multiselect(key="w_filter_value_0").set_value([]).run()
+    assert not at.exception
+
+    assert len(figures) == figure_count + 1
+    assert any("No rows match the current filters" in item.value for item in at.info)
+
+
 def test_shared_filter_changes_the_actual_chart_aggregation(monkeypatch):
     df = pd.DataFrame(
         {
